@@ -1,10 +1,8 @@
 package contextinfo
 
 import (
-	"os"
 	"os/user"
 	"path/filepath"
-	"reflect"
 	"testing"
 )
 
@@ -31,18 +29,5 @@ func TestWorkingDirectoryLabelPrivacyModes(t *testing.T) {
 		if got := local.WorkingDirectoryLabel("basename", usernamePath); got != "~" {
 			t.Fatalf("username basename leaked as %q", got)
 		}
-	}
-}
-
-func TestAvailableToolsUsesOnlyFixedAllowlist(t *testing.T) {
-	bin := t.TempDir()
-	for _, name := range []string{"git", "rg", "not-allowed"} {
-		if err := os.WriteFile(filepath.Join(bin, name), []byte("fixture"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Setenv("PATH", bin)
-	if got, want := (Local{}).AvailableTools(), []string{"git", "rg"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("tools=%v want %v", got, want)
 	}
 }

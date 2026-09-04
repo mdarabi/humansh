@@ -81,7 +81,22 @@ func (a Adapter) ValidateGenerated(ctx context.Context, command string) error {
 		}
 		return usererr.WithExit(protocol.ExitProviderMalformed, "syntax_invalid", "Provider returned a command that is not valid Zsh syntax.", "Nothing was changed or executed.", true, fmt.Errorf("zsh syntax check failed: %w", err))
 	}
-	return nil
+	pathValue := os.Getenv("PATH")
+	if pathValue == "" {
+		pathValue = "/usr/bin:/bin"
+	}
+	const resolveScript = `for name in "$@"; do
+  if ! whence -w -- "$name" >/dev/null 2>&1; then
+    print -r -- "HUMANSH_MISSING:$name"
+    exit 127
+  fi
+done`
+	return shell.ValidateExecutableAvailability(ctx, command, shell.ExecutableResolution{
+		ShellName: "Zsh",
+		Binary:    a.binary(),
+		Args:      []string{"-f", "-c", resolveScript, "humansh-executable-check"},
+		Env:       []string{"HOME=" + tempDir, "LANG=C", "PATH=" + pathValue, "TMPDIR=" + tempDir},
+	})
 }
 
 func (a Adapter) binary() string {

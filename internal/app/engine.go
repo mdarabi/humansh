@@ -25,7 +25,6 @@ type LocalValidator interface {
 type RiskAnalyzer interface{ Analyze(string) risk.Result }
 type RuntimeContext interface {
 	WorkingDirectoryLabel(mode, cwd string) string
-	AvailableTools() []string
 }
 
 type Engine struct {
@@ -93,16 +92,14 @@ func (e Engine) Translate(ctx context.Context, request RuntimeRequest) (Result, 
 		return Result{}, usererr.WithExit(protocol.ExitConfig, "shell_unknown", "Configured shell adapter is unavailable.", "Nothing was changed or executed.", false, nil)
 	}
 	workingLabel := ""
-	var tools []string
 	if e.Context != nil {
 		workingLabel = e.Context.WorkingDirectoryLabel(request.Config.WorkingContext, request.WorkingDir)
-		tools = e.Context.AvailableTools()
 	}
 	targetShell := adapter.PromptProfile().Shell
 	if targetShell == "" {
 		targetShell = string(adapter.ID())
 	}
-	response, err := provider.Translate(ctx, llm.TranslationRequest{Input: request.Input, Shell: targetShell, OS: runtime.GOOS, Architecture: runtime.GOARCH, WorkingContext: workingLabel, AvailableTools: tools})
+	response, err := provider.Translate(ctx, llm.TranslationRequest{Input: request.Input, Shell: targetShell, OS: runtime.GOOS, Architecture: runtime.GOARCH, WorkingContext: workingLabel})
 	if err != nil {
 		return Result{}, err
 	}

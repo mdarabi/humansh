@@ -58,12 +58,11 @@ type DiagnosticAction struct {
 }
 
 type TranslationRequest struct {
-	Input          string   `json:"input"`
-	Shell          string   `json:"shell"`
-	OS             string   `json:"os"`
-	Architecture   string   `json:"architecture"`
-	WorkingContext string   `json:"working_context,omitempty"`
-	AvailableTools []string `json:"available_tools,omitempty"`
+	Input          string `json:"input"`
+	Shell          string `json:"shell"`
+	OS             string `json:"os"`
+	Architecture   string `json:"architecture"`
+	WorkingContext string `json:"working_context,omitempty"`
 }
 
 type TranslationResponse struct {
