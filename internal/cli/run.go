@@ -148,12 +148,13 @@ func newRootCommand(streams IO, exitCode *int) *cobra.Command {
 		return runConfig(args, runtime, streams)
 	})
 	addRuntimeCommand("onboarding", "onboarding [zsh|bash]", "Learn the translate, review, and execute flow", false, runOnboarding)
-	setupCommand := addRuntimeCommand("setup", "setup [flags]", "Configure providers and all supported shell integrations", false, runSetup)
+	setupCommand := addRuntimeCommand("setup", "setup [flags]", "Configure Humansh with concise defaults", false, runSetup)
 	setupCommand.Flags().Bool("yes", false, "use safe defaults without prompts")
 	setupCommand.Flags().String("provider", "", "provider to select")
-	setupCommand.Flags().String("shell", "", "advanced restriction: integrate only bash or zsh")
+	setupCommand.Flags().String("shell", "", "integrate only bash or zsh")
 	setupCommand.Flags().Bool("repair", false, "repair shell integration")
 	setupCommand.Flags().Bool("no-shell-change", false, "do not edit shell startup files")
+	setupCommand.Flags().Bool("advanced", false, "customize every setup preference")
 	doctorCommand := addRuntimeCommand("doctor", "doctor [--fix] [--json]", "Diagnose or repair local setup", true, runDoctor)
 	doctorCommand.Flags().String("provider", "", "diagnose one provider")
 	doctorCommand.Flags().Bool("fix", false, "repair local deterministic setup")
@@ -704,7 +705,16 @@ func runConfig(args []string, rt bootstrap.Runtime, streams IO) int {
 	return 2
 }
 
-func runSetup(ctx context.Context, args []string, rt bootstrap.Runtime, streams IO) int {
+type setupOptions struct {
+	yes           bool
+	providerName  string
+	shellName     string
+	repair        bool
+	noShellChange bool
+	advanced      bool
+}
+
+func parseSetupOptions(args []string, streams IO) (setupOptions, bool) {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	fs.SetOutput(streams.Err)
 	yes := fs.Bool("yes", false, "use safe defaults without prompts")
@@ -712,14 +722,53 @@ func runSetup(ctx context.Context, args []string, rt bootstrap.Runtime, streams 
 	shellName := fs.String("shell", "", "restrict integration to bash or zsh")
 	repair := fs.Bool("repair", false, "repair shell integration")
 	noShellChange := fs.Bool("no-shell-change", false, "do not edit shell activation files")
+	advanced := fs.Bool("advanced", false, "customize every setup preference")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
-		return 2
+		return setupOptions{}, false
 	}
 	if *repair && (*providerName != "" || *shellName != "") {
 		fmt.Fprintln(streams.Err, "--repair preserves provider and installed shell integrations and cannot be combined with --provider or --shell")
+		return setupOptions{}, false
+	}
+	normalizedShell := strings.ToLower(*shellName)
+	if normalizedShell != "" && normalizedShell != string(shell.Zsh) && normalizedShell != string(shell.Bash) {
+		fmt.Fprintf(streams.Err, "unsupported shell %q; choose bash or zsh\n", *shellName)
+		return setupOptions{}, false
+	}
+	return setupOptions{
+		yes:           *yes,
+		providerName:  *providerName,
+		shellName:     normalizedShell,
+		repair:        *repair,
+		noShellChange: *noShellChange,
+		advanced:      *advanced,
+	}, true
+}
+
+func runSetup(ctx context.Context, args []string, rt bootstrap.Runtime, streams IO) int {
+	options, ok := parseSetupOptions(args, streams)
+	if !ok {
 		return 2
 	}
-	interactive := readerIsTerminal(streams.In) && !*yes && !*repair
+	if options.repair {
+		hasConfig, err := setupPathExists(rt.Paths.ConfigFile)
+		if err != nil {
+			fmt.Fprintf(streams.Err, "humansh: cannot inspect the existing configuration: %v\nNothing was changed or executed.\n", err)
+			return protocol.ExitConfig
+		}
+		if !hasConfig {
+			fmt.Fprintln(streams.Err, "humansh: there is no existing configuration to repair.\nNothing was changed or executed.\nNext: run `humansh setup`.")
+			return protocol.ExitConfig
+		}
+	}
+	if options.advanced {
+		return runAdvancedSetup(ctx, options, rt, streams)
+	}
+	return runQuickSetup(ctx, options, rt, streams)
+}
+
+func runAdvancedSetup(ctx context.Context, options setupOptions, rt bootstrap.Runtime, streams IO) int {
+	interactive := readerIsTerminal(streams.In) && !options.yes && !options.repair
 	ui := newSetupUI(streams, interactive)
 	ui.ctx = ctx
 	ui.header()
@@ -727,13 +776,13 @@ func runSetup(ctx context.Context, args []string, rt bootstrap.Runtime, streams 
 	ui.note("Humansh automatically configures every compatible Zsh or Bash installation it finds.")
 	cfg := rt.Config
 	var requestedShell shell.ID
-	if *shellName != "" {
-		requestedShell = shell.ID(*shellName)
+	if options.shellName != "" {
+		requestedShell = shell.ID(options.shellName)
 		switch requestedShell {
 		case shell.Zsh:
 		case shell.Bash:
 		default:
-			fmt.Fprintf(streams.Err, "unsupported shell %q; choose bash or zsh\n", *shellName)
+			fmt.Fprintf(streams.Err, "unsupported shell %q; choose bash or zsh\n", options.shellName)
 			return 2
 		}
 	}
@@ -741,7 +790,7 @@ func runSetup(ctx context.Context, args []string, rt bootstrap.Runtime, streams 
 	candidates := []shell.ID{shell.Zsh, shell.Bash}
 	if requestedShell != "" {
 		candidates = []shell.ID{requestedShell}
-	} else if *repair {
+	} else if options.repair {
 		if installed, stateErr := config.LoadInstallState(rt.Paths.InstallState); stateErr == nil {
 			candidates = installed.ShellIDs()
 		}
@@ -774,7 +823,7 @@ func runSetup(ctx context.Context, args []string, rt bootstrap.Runtime, streams 
 			ui.status(true, setupShellVersionLabel(id, diagnostic.Version), "compatible")
 			continue
 		}
-		if *repair {
+		if options.repair {
 			targetShells = append(targetShells, id)
 			ui.status(false, setupShellVersionLabel(id, diagnostic.Version), setupShellRequirement(id)+"; activation files will still be repaired")
 			continue
@@ -798,8 +847,8 @@ func runSetup(ctx context.Context, args []string, rt bootstrap.Runtime, streams 
 		cfg.Shell.Protocol = protocol.ReadlineVersion
 		cfg.Shell.SmartEnter = false
 	}
-	if *noShellChange {
-		previousStartups, previewErr := config.PreviewRemovedStartupChanges(rt.Paths, targetShells, *repair)
+	if options.noShellChange {
+		previousStartups, previewErr := config.PreviewRemovedStartupChanges(rt.Paths, targetShells, options.repair)
 		if previewErr != nil {
 			fmt.Fprintf(streams.Err, "humansh: cannot inspect installed shell integrations: %v\nNothing was changed or executed.\n", previewErr)
 			return protocol.ExitConfig
@@ -812,8 +861,8 @@ func runSetup(ctx context.Context, args []string, rt bootstrap.Runtime, streams 
 
 	ui.section(2, 6, "AI provider")
 	var pendingOpenRouter *setupOpenRouterCredential
-	if !*repair {
-		selected, ok, code := configureSetupProvider(ctx, &rt, &cfg, *providerName, *yes, ui, &pendingOpenRouter)
+	if !options.repair {
+		selected, ok, code := configureSetupProvider(ctx, &rt, &cfg, options.providerName, options.yes, ui, &pendingOpenRouter)
 		if code == 130 || ctx.Err() != nil {
 			printSetupCancellation(streams.Out, pendingOpenRouter != nil)
 			return 130
@@ -866,9 +915,9 @@ func runSetup(ctx context.Context, args []string, rt bootstrap.Runtime, streams 
 	}
 
 	ui.section(5, 6, "Review")
-	effectiveNoShellChange := *noShellChange
+	effectiveNoShellChange := options.noShellChange
 	var reviewedStartups []config.StartupChange
-	reviewedRemovals, migrationPreviewErr := config.PreviewRemovedStartupChanges(rt.Paths, targetShells, *repair)
+	reviewedRemovals, migrationPreviewErr := config.PreviewRemovedStartupChanges(rt.Paths, targetShells, options.repair)
 	if migrationPreviewErr != nil {
 		fmt.Fprintf(streams.Err, "humansh: cannot prepare shell-integration changes: %v\nNo humansh configuration or shell files were changed.\n", migrationPreviewErr)
 		return protocol.ExitConfig
@@ -878,7 +927,7 @@ func runSetup(ctx context.Context, args []string, rt bootstrap.Runtime, streams 
 		return protocol.ExitConfig
 	}
 	if !effectiveNoShellChange {
-		changes, previewErr := config.PreviewStartupChanges(rt.Paths, cfg, targetShells, *repair)
+		changes, previewErr := config.PreviewStartupChanges(rt.Paths, cfg, targetShells, options.repair)
 		if previewErr != nil {
 			if config.IsStartupAccessError(previewErr) && ui.interactive {
 				ui.warning("Shell startup cannot be updated automatically: " + previewErr.Error())
@@ -948,11 +997,11 @@ func runSetup(ctx context.Context, args []string, rt bootstrap.Runtime, streams 
 				setupErr = errors.Join(setupErr, fmt.Errorf("roll back OpenRouter API key: %w", rollbackErr))
 			}
 		}()
-		_, setupErr = config.SetupWithOptions(rt.Paths, cfg, version.Version, config.SetupOptions{NoShellChange: effectiveNoShellChange, Repair: *repair, Shells: targetShells, ReviewedStartups: reviewedStartups, ReviewedRemovals: reviewedRemovals})
+		_, setupErr = config.SetupWithOptions(rt.Paths, cfg, version.Version, config.SetupOptions{NoShellChange: effectiveNoShellChange, Repair: options.repair, Shells: targetShells, ReviewedStartups: reviewedStartups, ReviewedRemovals: reviewedRemovals})
 		return setupErr
 	}
 	var err error
-	if *repair {
+	if options.repair {
 		err = applySetup()
 	} else {
 		err = rt.Store.SaveAndApply(cfg, applySetup)

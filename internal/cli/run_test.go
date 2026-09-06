@@ -34,6 +34,7 @@ func isolatedEnv(t *testing.T) string {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
 	t.Setenv("OPENROUTER_API_KEY", "test-only")
 	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	t.Setenv("SHELL", "/bin/zsh")
 	return home
 }
 
@@ -186,7 +187,7 @@ func TestSetupNoShellChangeAndProviderUseValidation(t *testing.T) {
 	hideProvidersFromPath(t)
 	var out, errOut bytes.Buffer
 	code := Run(context.Background(), []string{"setup", "--yes", "--no-shell-change"}, IO{In: strings.NewReader(""), Out: &out, Err: &errOut})
-	if code != protocol.ExitProviderUnavailable || !strings.Contains(out.String(), "one ready AI provider is required") || !strings.Contains(out.String(), "No credential, configuration, or shell file was changed") || !strings.Contains(out.String(), "1/6  Shell compatibility") || strings.Contains(out.String(), "3/6  Translation preferences") || strings.Contains(out.String(), "\x1b[") {
+	if code != protocol.ExitProviderUnavailable || !strings.Contains(out.String(), "one ready AI provider is required") || !strings.Contains(out.String(), "No credential, configuration, or shell file was changed") || strings.Contains(out.String(), "1/6  Shell compatibility") || strings.Contains(out.String(), "Translation preferences") || strings.Contains(out.String(), "\x1b[") {
 		t.Fatalf("code=%d out=%s err=%s", code, out.String(), errOut.String())
 	}
 	if _, err := os.Stat(filepath.Join(home, ".zshrc")); !os.IsNotExist(err) {
@@ -231,7 +232,7 @@ func TestSetupShowsStartupPatchBeforeApplying(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Run(context.Background(), []string{"setup", "--yes"}, IO{In: strings.NewReader(""), Out: &out, Err: &errOut})
+	code := Run(context.Background(), []string{"setup", "--advanced", "--yes"}, IO{In: strings.NewReader(""), Out: &out, Err: &errOut})
 	if code != 0 {
 		t.Fatalf("code=%d out=%s err=%s", code, out.String(), errOut.String())
 	}
@@ -308,7 +309,7 @@ func TestSetupConfiguresBashReadlineIntegration(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".zshrc")); !os.IsNotExist(err) {
 		t.Fatalf("Bash setup unexpectedly edited .zshrc: %v", err)
 	}
-	for _, want := range []string{"Bash Enter", "Runs as typed", "load automatically in each configured shell", "Bash: type natural language and press Ctrl-G; Enter runs normal Bash commands."} {
+	for _, want := range []string{"Review", "Shell      Bash", "Provider   Codex", "Humansh is ready", "Try it: open a new terminal, type `list files`, press Ctrl-G to translate, then Enter to run."} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("Bash setup output missing %q:\n%s", want, out.String())
 		}
@@ -320,7 +321,7 @@ func TestSetupAutoConfiguresEveryAvailableShell(t *testing.T) {
 	installReadyCodexFixture(t, home)
 	installBashVersionFixture(t, "5.2.0")
 	var out, errOut bytes.Buffer
-	code := Run(context.Background(), []string{"setup", "--yes"}, IO{In: strings.NewReader(""), Out: &out, Err: &errOut})
+	code := Run(context.Background(), []string{"setup", "--advanced", "--yes"}, IO{In: strings.NewReader(""), Out: &out, Err: &errOut})
 	if code != 0 {
 		t.Fatalf("code=%d out=%s err=%s", code, out.String(), errOut.String())
 	}
@@ -361,6 +362,85 @@ func TestSetupAutoConfiguresEveryAvailableShell(t *testing.T) {
 	}
 }
 
+func TestQuickSetupConfiguresOnlyTheLoginShell(t *testing.T) {
+	home := isolatedEnv(t)
+	installReadyCodexFixture(t, home)
+	installBashVersionFixture(t, "5.2.0")
+	t.Setenv("SHELL", "/bin/zsh")
+	var out, errOut bytes.Buffer
+	code := Run(context.Background(), []string{"setup", "--yes"}, IO{In: strings.NewReader(""), Out: &out, Err: &errOut})
+	if code != 0 {
+		t.Fatalf("code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	paths, err := config.ResolvePaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := config.LoadInstallState(paths.InstallState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(state.ShellIDs(), []shell.ID{shell.Zsh}) {
+		t.Fatalf("quick setup shell integrations=%v", state.ShellIDs())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".bashrc")); !os.IsNotExist(err) {
+		t.Fatalf("quick setup unexpectedly changed .bashrc: %v", err)
+	}
+	text := out.String()
+	for _, want := range []string{"humansh setup", "Review", "Shell      Zsh", "Provider   Codex", "Humansh is ready", "Try it: open a new terminal, type `list files`, press Enter to translate, then Enter to run."} {
+		if !strings.Contains(text, want) {
+			t.Errorf("quick setup missing %q:\n%s", want, text)
+		}
+	}
+	for _, hidden := range []string{"1/6", "Translation preferences", "Shell controls", "Shell activation patch", "Apply this setup?", "Controls   ", "One small Codex request"} {
+		if strings.Contains(text, hidden) {
+			t.Errorf("quick setup exposed advanced output %q:\n%s", hidden, text)
+		}
+	}
+}
+
+func TestQuickSetupFallsBackToAnAvailableShellWhenLoginShellIsUnknown(t *testing.T) {
+	home := isolatedEnv(t)
+	installReadyCodexFixture(t, home)
+	codexPath, err := exec.LookPath("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installBashVersionFixture(t, "5.2.0")
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	for name, target := range map[string]string{"codex": codexPath, "bash": bashPath} {
+		if err := os.Symlink(target, filepath.Join(binDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("SHELL", "")
+
+	var out, errOut bytes.Buffer
+	code := Run(context.Background(), []string{"setup", "--yes"}, IO{In: strings.NewReader(""), Out: &out, Err: &errOut})
+	if code != 0 {
+		t.Fatalf("code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	paths, err := config.ResolvePaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := config.LoadInstallState(paths.InstallState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(state.ShellIDs(), []shell.ID{shell.Bash}) {
+		t.Fatalf("fallback shell integrations=%v", state.ShellIDs())
+	}
+	if !strings.Contains(out.String(), "Shell      Bash") {
+		t.Fatalf("fallback shell was not shown:\n%s", out.String())
+	}
+}
+
 func TestSetupShellVersionLabelsAreConcise(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
@@ -383,7 +463,7 @@ func TestSetupSkipsUnsupportedSecondaryShell(t *testing.T) {
 	installReadyCodexFixture(t, home)
 	installBashVersionFixture(t, "3.2.57")
 	var out, errOut bytes.Buffer
-	code := Run(context.Background(), []string{"setup", "--yes"}, IO{In: strings.NewReader(""), Out: &out, Err: &errOut})
+	code := Run(context.Background(), []string{"setup", "--advanced", "--yes"}, IO{In: strings.NewReader(""), Out: &out, Err: &errOut})
 	if code != 0 {
 		t.Fatalf("code=%d out=%s err=%s", code, out.String(), errOut.String())
 	}
@@ -413,17 +493,36 @@ func TestSetupRejectsAppleBashThreeActionably(t *testing.T) {
 	}
 }
 
-func TestSetupRepairAlsoRequiresAReadyProvider(t *testing.T) {
+func TestQuickSetupRepairPreservesTheConfiguredProviderWithoutAProbe(t *testing.T) {
 	home := isolatedEnv(t)
+	installReadyCodexFixture(t, home)
+	var out, errOut bytes.Buffer
+	code := Run(context.Background(), []string{"setup", "--yes"}, IO{In: strings.NewReader(""), Out: &out, Err: &errOut})
+	if code != 0 {
+		t.Fatalf("initial setup code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
 	hideProvidersFromPath(t)
+	out.Reset()
+	errOut.Reset()
+	code = Run(context.Background(), []string{"setup", "--repair"}, IO{In: strings.NewReader(""), Out: &out, Err: &errOut})
+	if code != 0 || !strings.Contains(out.String(), "Provider   Codex") || !strings.Contains(out.String(), "Humansh is ready") || strings.Contains(out.String(), "Checking Codex") {
+		t.Fatalf("code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".zshrc")); err != nil {
+		t.Fatalf("repair removed the Zsh integration: %v", err)
+	}
+}
+
+func TestSetupRepairRequiresExistingConfiguration(t *testing.T) {
+	home := isolatedEnv(t)
 	var out, errOut bytes.Buffer
 	code := Run(context.Background(), []string{"setup", "--repair"}, IO{In: strings.NewReader(""), Out: &out, Err: &errOut})
-	if code != protocol.ExitProviderUnavailable || !strings.Contains(out.String(), "one ready AI provider is required") || strings.Contains(out.String(), "3/6  Translation preferences") {
+	if code != protocol.ExitConfig || !strings.Contains(errOut.String(), "no existing configuration to repair") || !strings.Contains(errOut.String(), "humansh setup") {
 		t.Fatalf("code=%d out=%s err=%s", code, out.String(), errOut.String())
 	}
 	for _, path := range []string{filepath.Join(home, ".zshrc"), filepath.Join(home, "config", "humansh", "config.toml")} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("provider-less repair changed %s: %v", path, err)
+			t.Fatalf("repair without config changed %s: %v", path, err)
 		}
 	}
 }

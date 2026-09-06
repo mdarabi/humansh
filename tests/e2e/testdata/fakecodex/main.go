@@ -40,6 +40,7 @@ type response struct {
 func main() {
 	args := os.Args[1:]
 	if len(args) == 2 && args[0] == "exec" && args[1] == probePrompt {
+		recordProbe()
 		fmt.Println("HUMANSH_READY")
 		return
 	}
@@ -92,6 +93,25 @@ func main() {
 		fail("write translation response: %v", err)
 	}
 	record("completed", request)
+}
+
+func recordProbe() {
+	executable, err := os.Executable()
+	if err != nil {
+		fail("resolve fixture executable for setup probe: %v", err)
+	}
+	logPath := filepath.Join(filepath.Dir(executable), "humansh-e2e-probes.log")
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		fail("open setup probe log: %v", err)
+	}
+	if _, err := fmt.Fprintln(file, "probe"); err != nil {
+		_ = file.Close()
+		fail("write setup probe log: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		fail("close setup probe log: %v", err)
+	}
 }
 
 func requestInput(prompt []byte) string {

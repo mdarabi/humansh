@@ -51,6 +51,24 @@ func TestCLIErrorCatalogMappings(t *testing.T) {
 	}
 }
 
+func TestProbeFailureReturnsProviderMessageWithoutInterpretingIt(t *testing.T) {
+	t.Parallel()
+	const message = "Error: Authentication required. Please run 'agent login' first."
+	diagnostic := ProbeDiagnostic(
+		llm.Diagnostic{Installed: true, Configured: true, AuthMode: "provider_managed"},
+		llm.Cursor,
+		20*time.Second,
+		processrunner.Result{Stderr: []byte(message + "\n")},
+		errors.New("exit status 1"),
+	)
+	if diagnostic.Available || !diagnostic.LiveCheck || diagnostic.Message != message {
+		t.Fatalf("diagnostic=%+v", diagnostic)
+	}
+	if len(diagnostic.NextSteps) != 0 {
+		t.Fatalf("provider message was interpreted into recovery actions: %+v", diagnostic.NextSteps)
+	}
+}
+
 func TestTimeoutGuidanceIsSharedByEveryProvider(t *testing.T) {
 	t.Parallel()
 	for _, provider := range []llm.ProviderID{llm.Codex, llm.Claude, llm.Cursor, llm.OpenRouter} {

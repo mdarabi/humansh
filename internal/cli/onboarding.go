@@ -11,7 +11,7 @@ import (
 	"github.com/agenticlab-ai/humansh/internal/shell/protocol"
 )
 
-const onboardingExample = "list all the files in this directory"
+const onboardingExample = "list files"
 
 func runOnboarding(_ context.Context, args []string, rt bootstrap.Runtime, streams IO) int {
 	if len(args) > 1 {
@@ -55,7 +55,6 @@ func runOnboarding(_ context.Context, args []string, rt bootstrap.Runtime, strea
 func printOnboardingFlow(configured []shell.ID, requested shell.ID, cfg config.RuntimeConfig, ui *setupUI) {
 	fmt.Fprintln(ui.streams.Out)
 	fmt.Fprintln(ui.streams.Out, ui.paint(ansiBold+ansiCyan, "Getting started with Humansh"))
-	fmt.Fprintln(ui.streams.Out, ui.paint(ansiDim, "Translate first, review the generated command, then choose whether to run it."))
 
 	if requested != "" {
 		printShellOnboarding(requested, cfg, ui)
@@ -71,15 +70,7 @@ func printOnboardingFlow(configured []shell.ID, requested shell.ID, cfg config.R
 	if hasBash && !hasZsh {
 		printShellOnboarding(shell.Bash, cfg, ui)
 	} else if hasBash {
-		if ui.interactive {
-			showBash, err := ui.askYesNo("Show the Bash walkthrough too?", false)
-			if err == nil && showBash {
-				printShellOnboarding(shell.Bash, cfg, ui)
-			}
-		} else {
-			fmt.Fprintln(ui.streams.Out)
-			fmt.Fprintln(ui.streams.Out, "  Bash is configured too. Run `humansh onboarding bash` for its walkthrough.")
-		}
+		fmt.Fprintln(ui.streams.Out, "  Bash is configured too. Run `humansh onboarding bash` for its guide.")
 	}
 	printOnboardingFooter(ui)
 }
@@ -88,32 +79,23 @@ func printShellOnboarding(id shell.ID, cfg config.RuntimeConfig, ui *setupUI) {
 	name := shellDisplayName(id)
 	fmt.Fprintln(ui.streams.Out)
 	fmt.Fprintln(ui.streams.Out, ui.paint(ansiBold, name+" quick start"))
-	fmt.Fprintf(ui.streams.Out, "  If %s was already open during installation, open a new %s terminal first.\n", name, name)
-	fmt.Fprintln(ui.streams.Out)
-	fmt.Fprintln(ui.streams.Out, "  1. Type this at the shell prompt, but do not execute it:")
-	fmt.Fprintln(ui.streams.Out, "       "+ui.paint(ansiCyan, onboardingExample))
+	fmt.Fprintf(ui.streams.Out, "  Open a new %s terminal.\n", name)
+	fmt.Fprintln(ui.streams.Out, "  Try: "+ui.paint(ansiCyan, onboardingExample))
 
 	translationKey := config.BindingLabel(cfg.Shell.ForceTranslateBinding)
 	if id == shell.Zsh && cfg.Shell.SmartEnter {
-		fmt.Fprintln(ui.streams.Out, "  2. Press Enter once to translate it.")
+		fmt.Fprintln(ui.streams.Out, "  Press Enter to translate it. Review the command, then press Enter again to run it.")
 	} else if id == shell.Bash {
-		fmt.Fprintf(ui.streams.Out, "  2. Press %s to translate it — do not press Enter yet; Bash keeps Enter for normal commands.\n", ui.paint(ansiBold, translationKey))
+		fmt.Fprintf(ui.streams.Out, "  Press %s to translate it. Review the command, then press Enter to run it.\n", ui.paint(ansiBold, translationKey))
 	} else {
-		fmt.Fprintf(ui.streams.Out, "  2. Press %s to translate it. Smart Enter is off.\n", ui.paint(ansiBold, translationKey))
+		fmt.Fprintf(ui.streams.Out, "  Press %s to translate it. Review the command, then press Enter to run it.\n", ui.paint(ansiBold, translationKey))
 	}
-
-	fmt.Fprintln(ui.streams.Out, "  3. Humansh replaces your request with a shell command for review. Nothing has run yet.")
-	if id == shell.Zsh && cfg.Shell.SmartEnter {
-		fmt.Fprintln(ui.streams.Out, "  4. If the command looks right, press Enter again to execute it.")
-	} else {
-		fmt.Fprintln(ui.streams.Out, "  4. If the command looks right, press Enter to execute it.")
-	}
-	fmt.Fprintf(ui.streams.Out, "     Otherwise, edit it or press %s to clear the line.\n", ui.paint(ansiBold, config.BindingLabel(cfg.Shell.ClearLineBinding)))
+	fmt.Fprintf(ui.streams.Out, "  Edit it or press %s to clear. Nothing runs before review.\n", ui.paint(ansiBold, config.BindingLabel(cfg.Shell.ClearLineBinding)))
 }
 
 func printOnboardingFooter(ui *setupUI) {
 	fmt.Fprintln(ui.streams.Out)
-	fmt.Fprintln(ui.streams.Out, "  You can repeat this guide anytime with `humansh onboarding [zsh|bash]`.")
+	fmt.Fprintln(ui.streams.Out, "  Repeat anytime: `humansh onboarding [zsh|bash]`.")
 }
 
 func onboardingHasShell(configured []shell.ID, target shell.ID) bool {

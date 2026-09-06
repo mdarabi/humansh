@@ -54,7 +54,7 @@ The generated command lands in your editable command line. Nothing runs until yo
 | **Shell** | Zsh (full Smart Enter), or Bash 4.3+ (explicit translation) |
 | **Provider** | One of: Codex CLI, Claude Code, Cursor CLI, or an OpenRouter API key |
 
-Bash integration needs 4.3 or newer so humansh can safely capture and restore existing Readline bindings. macOS still ships Bash 3.2 — install a current one with `brew install bash`. Setup reports each installed shell and continues with Zsh if Bash is too old.
+Bash integration needs 4.3 or newer so humansh can safely capture and restore existing Readline bindings. macOS still ships Bash 3.2 — install a current one with `brew install bash` before selecting Bash during setup.
 
 ## Install
 
@@ -70,13 +70,13 @@ From a checkout:
 ./scripts/install.sh --local
 ```
 
-Then follow the guided setup. It detects every supported shell on the machine, so you do not need to know or select your current one:
+Then follow the guided setup. By default it selects your login shell and safe defaults, so the normal path asks only which provider to use when several are installed, followed by one confirmation:
 
 ```sh
 humansh setup
 ```
 
-Setup shows you the shell modes, provider, model, privacy setting, timeout, and shortcuts, plus the exact startup-file patches it will apply — and writes nothing until you confirm. `--yes` runs it non-interactively. See [docs/setup.md](docs/setup.md) for the full flow, including OpenRouter key handling and pinning a specific provider executable.
+Setup names the provider, shell, and startup file it will change, then runs one provider check after confirmation. `--yes` runs it non-interactively. A healthy rerun keeps the saved settings with no questions or provider check. Use `humansh setup --advanced` to change models, privacy, timeout, shortcuts, provider executables, OpenRouter, or configure every compatible shell. See [docs/setup.md](docs/setup.md) for details.
 
 The terminal that launched the installer keeps its old shell bindings. Open a new terminal (or run `exec zsh` for Zsh), then try:
 
@@ -84,7 +84,7 @@ The terminal that launched the installer keeps its old shell bindings. Open a ne
 show me the largest files in this folder
 ```
 
-After an interactive installation completes, Humansh shows a short walkthrough using the configured shell controls. The Zsh guide teaches the two-Enter translate/review/execute flow when Smart Enter is enabled. If Bash is configured, the user can opt into its separate guide, which teaches the force-translation shortcut because Bash keeps Enter for normal commands. Run `humansh onboarding`, `humansh onboarding zsh`, or `humansh onboarding bash` to repeat the walkthrough later.
+For a concise reminder of the configured controls, run `humansh onboarding`, `humansh onboarding zsh`, or `humansh onboarding bash`. The installer does not add another walkthrough after setup.
 
 ## Keys and shell modes
 
@@ -97,7 +97,7 @@ After an interactive installation completes, Humansh shows a short walkthrough u
 
 Zsh gets Smart Enter — one key that decides. Bash uses explicit translation because Readline cannot safely make Enter conditionally replace the buffer.
 
-`Ctrl-G` replaces the stock abort/list-expand binding, and `Escape` replaces its prior action in the supported keymaps (in vi insert mode it clears the line rather than entering command mode). Setup reports every collision, and all four are configurable. Run `humansh-bindings` in either shell to see active and captured bindings.
+`Ctrl-G` replaces the stock abort/list-expand binding, and `Escape` replaces its prior action in the supported keymaps (in vi insert mode it clears the line rather than entering command mode). All four controls are configurable in `humansh setup --advanced`. Run `humansh-bindings` in either shell to see active and captured bindings.
 
 While a provider works, both integrations show `Translating with <provider>…`. `Escape` cancels the provider process tree immediately; `Ctrl-C` cancels and restores your original text.
 
@@ -149,7 +149,7 @@ humansh provider test codex
 humansh provider configure openrouter --model provider/model
 ```
 
-Setup and `provider use` disclose and send one constant minimal prompt, which may consume a small amount of provider quota. Humansh deliberately does not call or parse optional CLI login, status, version, or help surfaces; centrally managed distributions may omit them. `provider test` runs the real structured translation path and returns the provider's bounded, redacted error text when it fails.
+Setup and `provider use` send one constant minimal prompt, which may consume a small amount of provider quota. Humansh deliberately does not call or parse optional CLI login, status, version, or help surfaces; centrally managed distributions may omit them. A failed setup check shows the provider's own bounded, credential-redacted message without interpreting it. `provider test` runs the real structured translation path.
 
 Every structured translation runs in an empty temporary directory with a minimal environment. Codex and Claude tool/isolation controls remain mandatory; Cursor uses its read-only Ask/sandbox mode and local schema validation. A rejected production flag fails closed rather than downgrading.
 

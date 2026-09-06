@@ -119,20 +119,17 @@ binary_temp=
 binary_replaced=1
 
 setup_status=0
-onboarding_io=
 setup_hint="$binary setup"
 [ -z "$target_shell" ] || setup_hint="$setup_hint --shell $target_shell"
 if [ "${HUMANSH_NONINTERACTIVE:-0}" = 1 ]; then
   echo "Run '$setup_hint' from a terminal to finish setup."
 elif [ -t 0 ]; then
-	onboarding_io='stdio'
 	if [ -n "$target_shell" ]; then
 		if "$binary" setup --shell "$target_shell"; then :; else setup_status=$?; fi
 	else
 		if "$binary" setup; then :; else setup_status=$?; fi
 	fi
 elif (: </dev/tty) 2>/dev/null; then
-	onboarding_io='tty'
 	if [ -n "$target_shell" ]; then
 		if "$binary" setup --shell "$target_shell" </dev/tty >/dev/tty 2>/dev/tty; then :; else setup_status=$?; fi
 	else
@@ -140,10 +137,6 @@ elif (: </dev/tty) 2>/dev/null; then
 	fi
 else
   echo "Run '$setup_hint' from a terminal to finish setup."
-fi
-if [ "$setup_status" -ne 0 ]; then
-	echo "humansh installer: setup did not complete; rolling back the binary installation." >&2
-	exit "$setup_status"
 fi
 binary_restored=0
 if [ ! -e "$binary" ] && [ ! -L "$binary" ]; then
@@ -164,18 +157,18 @@ fi
 if [ "$binary_restored" -eq 1 ]; then
 	echo "humansh installer: the installed binary disappeared during setup and was restored."
 fi
+if [ "$setup_status" -ne 0 ]; then
+	if [ "$setup_status" -eq 21 ]; then
+		printf '\nInstallation stopped\n\n'
+		printf '  Fix the provider issue above, then run the installer again.\n'
+		exit 0
+	fi
+	echo "humansh installer: setup did not complete; rolling back the binary installation." >&2
+	exit "$setup_status"
+fi
 install_committed=1
 [ -z "$previous_binary" ] || rm -f "$previous_binary"
 previous_binary=
-echo "Installed humansh to $binary"
-case $onboarding_io in
-  stdio)
-	if "$binary" onboarding; then :; else
-		echo "humansh installer: onboarding could not be shown. Run '$binary onboarding' later." >&2
-	fi ;;
-  tty)
-	if "$binary" onboarding </dev/tty >/dev/tty 2>/dev/tty; then :; else
-		echo "humansh installer: onboarding could not be shown. Run '$binary onboarding' later." >&2
-	fi ;;
-esac
-echo "humansh is MIT-licensed and provided \"as is\", with no warranty and no author liability; you are responsible for every command you run. License: https://github.com/agenticlab-ai/humansh/blob/main/LICENSE"
+printf '\nInstallation details\n\n'
+printf '  %-10s %s%s\n' 'Binary' '~' '/.local/bin/humansh'
+printf '  %-10s %s\n' 'License' 'MIT'
