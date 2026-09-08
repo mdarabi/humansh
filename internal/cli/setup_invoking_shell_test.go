@@ -16,7 +16,7 @@ func TestInvokingShellUsesNearestSupportedAncestor(t *testing.T) {
 	}{
 		50: {parent: 40, command: "/bin/sh"},
 		40: {parent: 30, command: "make"},
-		30: {parent: 20, command: "/opt/homebrew/bin/bash"},
+		30: {parent: 20, command: "/opt/homebrew/bin/bash /tmp/run-installer-from-bash"},
 		20: {parent: 1, command: "/bin/zsh"},
 	}
 	got := invokingShellFromAncestors(50, func(pid int) (int, string, error) {
@@ -50,8 +50,25 @@ func TestInstallerQuickSetupAddsInvokingShellToInstallState(t *testing.T) {
 
 func TestParseParentProcess(t *testing.T) {
 	t.Parallel()
-	parent, command, err := parseParentProcess([]byte("  123 /opt/homebrew/bin/bash\n"))
-	if err != nil || parent != 123 || command != "/opt/homebrew/bin/bash" {
+	parent, command, err := parseParentProcess([]byte("  123 /opt/homebrew/bin/bash /tmp/run-installer-from-bash\n"))
+	if err != nil || parent != 123 || command != "/opt/homebrew/bin/bash /tmp/run-installer-from-bash" {
 		t.Fatalf("parent=%d command=%q err=%v", parent, command, err)
+	}
+}
+
+func TestProcessShellIDUsesExecutableFromProcessArguments(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		arguments string
+		want      shell.ID
+	}{
+		{arguments: "/bin/bash /tmp/run-installer-from-bash", want: shell.Bash},
+		{arguments: "/usr/bin/zsh -f -c setup", want: shell.Zsh},
+		{arguments: "-zsh", want: shell.Zsh},
+		{arguments: "make install"},
+	} {
+		if got := processShellID(test.arguments); got != test.want {
+			t.Errorf("processShellID(%q)=%q, want %q", test.arguments, got, test.want)
+		}
 	}
 }

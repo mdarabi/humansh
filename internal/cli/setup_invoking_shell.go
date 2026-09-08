@@ -21,7 +21,7 @@ func detectInvokingShell() shell.ID {
 		return ""
 	}
 	return invokingShellFromAncestors(os.Getppid(), func(pid int) (int, string, error) {
-		output, err := exec.Command(psPath, "-p", strconv.Itoa(pid), "-o", "ppid=", "-o", "comm=").Output()
+		output, err := exec.Command(psPath, "-p", strconv.Itoa(pid), "-o", "ppid=", "-o", "args=").Output()
 		if err != nil {
 			return 0, "", err
 		}
@@ -80,7 +80,12 @@ func parseParentProcess(output []byte) (int, string, error) {
 }
 
 func processShellID(command string) shell.ID {
-	name := strings.TrimPrefix(filepath.Base(strings.TrimSpace(command)), "-")
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return ""
+	}
+	executable := strings.Trim(fields[0], `"'`)
+	name := strings.TrimPrefix(filepath.Base(executable), "-")
 	switch name {
 	case string(shell.Bash):
 		return shell.Bash
