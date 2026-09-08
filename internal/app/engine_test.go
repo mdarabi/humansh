@@ -46,16 +46,14 @@ func (fakeShell) IntegrationAsset() ([]byte, bool)                { return nil, 
 func (fakeShell) SupportedProtocols() []string                    { return []string{protocol.Version} }
 
 func testEngine(provider *fakeProvider) Engine {
-	return Engine{Classifier: classifier.Classifier{}, Providers: llm.MapRegistry{llm.Codex: provider}, Shells: shell.MapRegistry{shell.Zsh: fakeShell{}}, Context: fixedRuntimeContext{label: "test", tools: []string{"git"}}}
+	return Engine{Classifier: classifier.Classifier{}, Providers: llm.MapRegistry{llm.Codex: provider}, Shells: shell.MapRegistry{shell.Zsh: fakeShell{}}, Context: fixedRuntimeContext{label: "test"}}
 }
 
 type fixedRuntimeContext struct {
 	label string
-	tools []string
 }
 
 func (c fixedRuntimeContext) WorkingDirectoryLabel(string, string) string { return c.label }
-func (c fixedRuntimeContext) AvailableTools() []string                    { return append([]string(nil), c.tools...) }
 
 type recordingValidator struct {
 	responses int

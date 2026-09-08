@@ -2,7 +2,6 @@ package contextinfo
 
 import (
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 )
@@ -31,16 +30,4 @@ func (Local) WorkingDirectoryLabel(mode, cwd string) string {
 		return "~"
 	}
 	return base
-}
-
-var toolAllowlist = []string{"awk", "brew", "curl", "docker", "fd", "find", "fzf", "gh", "git", "grep", "jq", "kubectl", "lsof", "make", "node", "npm", "pnpm", "python3", "rg", "sed", "sort", "ssh", "tar", "xargs", "yarn"}
-
-func (Local) AvailableTools() []string {
-	out := make([]string, 0, len(toolAllowlist))
-	for _, name := range toolAllowlist {
-		if _, err := exec.LookPath(name); err == nil {
-			out = append(out, name)
-		}
-	}
-	return out
 }

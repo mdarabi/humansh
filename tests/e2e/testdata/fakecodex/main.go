@@ -19,8 +19,11 @@ const (
 	createMarkerRequest     = "please create a marker file for me"
 	deleteTargetRequest     = "please delete the e2e target directory"
 	providerFailureRequest  = "show me a provider failure"
+	optionalToolRequest     = "use the locally installed optional tool"
+	missingToolRequest      = "use a missing tool to show its version"
 	privateEnvironmentValue = "HUMANSH_E2E_ENV_SECRET_DO_NOT_SEND"
 	privateFileValue        = "HUMANSH_E2E_FILE_SECRET_DO_NOT_SEND"
+	osBaselineGuidance      = "Prefer shell builtins and standard utilities normally supplied with the stated operating system."
 )
 
 type event struct {
@@ -66,8 +69,8 @@ func main() {
 		fail("translation received private environment or file content")
 	}
 
-	request := requestInput(input)
-	result, ok := fixtureResponse(request)
+	request, hasCommandInventory := requestInput(input)
+	result, ok := fixtureResponse(request, hasCommandInventory, bytes.Contains(input, []byte(osBaselineGuidance)))
 	if !ok {
 		fail("translation fixture received an unexpected request: %q", request)
 	}
@@ -114,7 +117,7 @@ func recordProbe() {
 	}
 }
 
-func requestInput(prompt []byte) string {
+func requestInput(prompt []byte) (string, bool) {
 	const begin = "REQUEST_JSON_BEGIN\n"
 	const end = "\nREQUEST_JSON_END"
 	start := bytes.Index(prompt, []byte(begin))
@@ -126,28 +129,44 @@ func requestInput(prompt []byte) string {
 	if finish < 0 {
 		fail("translation prompt omitted its closing request boundary")
 	}
+	requestJSON := prompt[start : start+finish]
 	var request struct {
 		Input string `json:"input"`
 	}
-	if err := json.Unmarshal(prompt[start:start+finish], &request); err != nil {
+	if err := json.Unmarshal(requestJSON, &request); err != nil {
 		fail("decode translation request: %v", err)
 	}
-	return request.Input
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(requestJSON, &fields); err != nil {
+		fail("decode translation request fields: %v", err)
+	}
+	_, hasCommandInventory := fields["available_tools"]
+	return request.Input, hasCommandInventory
 }
 
-func fixtureResponse(request string) (response, bool) {
+func fixtureResponse(request string, hasCommandInventory, hasOSBaselineGuidance bool) (response, bool) {
+	if request == shortListRequest && (hasCommandInventory || !hasOSBaselineGuidance) {
+		return response{
+			Status:      "ok",
+			Command:     "find . -maxdepth 1 -mindepth 1 -print",
+			Explanation: "Lists entries immediately below the current directory.",
+			Assumptions: []string{},
+		}, true
+	}
 	tests := []struct {
 		request     string
 		command     string
 		explanation string
 	}{
 		{listRequest, "ls -la", "Lists every entry in the current directory."},
-		{shortListRequest, "ls -la", "Lists every entry in the current directory."},
+		{shortListRequest, "ls", "Lists entries in the current directory."},
 		{ambiguousRMRequest, "man rm", "Opens the manual for rm so its expected arguments can be checked."},
 		{findContentRequest, "grep -R -- 'ABC' .", "Finds files below the current directory that contain ABC."},
 		{createMarkerRequest, "touch humansh-e2e-generated-marker", "Creates the requested marker file."},
 		{deleteTargetRequest, "rm -rf -- humansh-e2e-high-risk-target", "Recursively removes the requested test directory."},
 		{providerFailureRequest, "", ""},
+		{optionalToolRequest, "humansh-e2e-optional --version", "Uses the locally installed optional tool."},
+		{missingToolRequest, "humansh-e2e-missing --version", "Uses the requested missing tool."},
 	}
 	for _, test := range tests {
 		if request == test.request {

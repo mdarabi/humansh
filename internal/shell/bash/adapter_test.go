@@ -3,9 +3,11 @@ package bash
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
+	usererr "github.com/agenticlab-ai/humansh/internal/errors"
 	"github.com/agenticlab-ai/humansh/internal/processrunner"
 	"github.com/agenticlab-ai/humansh/internal/shell"
 	"github.com/agenticlab-ai/humansh/internal/shell/contracttest"
@@ -31,6 +33,35 @@ func TestSyntaxCheckDoesNotExecute(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "output")); !os.IsNotExist(err) {
 		t.Fatal("syntax check performed redirection")
+	}
+}
+
+func TestAvailabilityCheckUsesTheLocalPathWithoutExecutingTheCommand(t *testing.T) {
+	shellBinary, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	tool := filepath.Join(bin, "humansh-test-optional-bash")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\nprintf executed > \"$0.executed\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	adapter := Adapter{Binary: shellBinary}
+	if err := adapter.ValidateGenerated(context.Background(), "humansh-test-optional-bash --version"); err != nil {
+		t.Fatalf("arbitrary PATH executable was rejected: %v", err)
+	}
+	if _, err := os.Stat(tool + ".executed"); !os.IsNotExist(err) {
+		t.Fatalf("availability check executed the command: %v", err)
+	}
+	if err := adapter.ValidateGenerated(context.Background(), "printf '%s\\n' builtin"); err != nil {
+		t.Fatalf("Bash builtin was rejected: %v", err)
+	}
+
+	err = adapter.ValidateGenerated(context.Background(), "humansh-test-missing-bash --version")
+	typed, ok := usererr.As(err)
+	if !ok || typed.Code != "generated_command_unavailable" || typed.ExitCode != protocol.ExitProviderMalformed {
+		t.Fatalf("missing executable error=%#v", err)
 	}
 }
 
