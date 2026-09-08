@@ -125,15 +125,15 @@ if [ "${HUMANSH_NONINTERACTIVE:-0}" = 1 ]; then
   echo "Run '$setup_hint' from a terminal to finish setup."
 elif [ -t 0 ]; then
 	if [ -n "$target_shell" ]; then
-		if "$binary" setup --shell "$target_shell"; then :; else setup_status=$?; fi
+		if HUMANSH_INSTALLER_RUN=1 "$binary" setup --shell "$target_shell"; then :; else setup_status=$?; fi
 	else
-		if "$binary" setup; then :; else setup_status=$?; fi
+		if HUMANSH_INSTALLER_RUN=1 "$binary" setup; then :; else setup_status=$?; fi
 	fi
 elif (: </dev/tty) 2>/dev/null; then
 	if [ -n "$target_shell" ]; then
-		if "$binary" setup --shell "$target_shell" </dev/tty >/dev/tty 2>/dev/tty; then :; else setup_status=$?; fi
+		if HUMANSH_INSTALLER_RUN=1 "$binary" setup --shell "$target_shell" </dev/tty >/dev/tty 2>/dev/tty; then :; else setup_status=$?; fi
 	else
-		if "$binary" setup </dev/tty >/dev/tty 2>/dev/tty; then :; else setup_status=$?; fi
+		if HUMANSH_INSTALLER_RUN=1 "$binary" setup </dev/tty >/dev/tty 2>/dev/tty; then :; else setup_status=$?; fi
 	fi
 else
   echo "Run '$setup_hint' from a terminal to finish setup."

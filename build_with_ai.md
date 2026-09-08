@@ -488,7 +488,7 @@ The Go shell module does not execute a generated command. It validates and retur
 
 - Typed schemas and validation.
 - Setup-time defaults, the concise setup path, and the advanced setup wizard.
-- Provider selection, fresh-install login-shell selection, and the set of installed shell integrations.
+- Provider selection, fresh-install invoking-shell selection, and the set of installed shell integrations.
 - Atomic persistence and versioned migration.
 - Install-state recording for doctor/repair/uninstall.
 - Secret-store abstraction and secure credential references.
@@ -520,7 +520,7 @@ Only the configuration module reads or writes `config.toml`, `classifier.toml`, 
 Installation/setup must determine and persist at least:
 
 - Config schema version.
-- The fresh install's usable login-shell adapter by default; every usable installed adapter when advanced discovery is requested.
+- The fresh install's usable invoking-shell adapter by default, with `$SHELL` as a fallback; every usable installed adapter when advanced discovery is requested.
 - Each installed shell's protocol version and integration asset version/hash.
 - Whether smart Enter is enabled and the configured clear-line/force-translate/force-literal bindings.
 - Selected LLM provider: `codex`, `claude`, `cursor`, or `openrouter`.
@@ -568,7 +568,7 @@ Implement the following user-facing commands.
 
 ### `humansh setup`
 
-Interactive, idempotent setup with a concise default path. On a fresh install, select the usable login shell from `$SHELL`, discover installed CLI providers without inference, ask for a provider only when multiple candidates exist, summarize the startup-file action, and ask once before applying. Probe the selected provider only after confirmation. A healthy rerun preserves the saved provider, preferences, and installed shell set with no questions and no provider probe. A repair or migration names each startup file it will change and asks at most once.
+Interactive, idempotent setup with a concise default path. On a fresh install, select the invoking Bash or Zsh session, falling back to the usable login shell from `$SHELL` when it cannot be identified, discover installed CLI providers without inference, ask for a provider only when multiple candidates exist, summarize the startup-file action, and ask once before applying. Probe the selected provider only after confirmation. A healthy direct rerun preserves the saved provider, preferences, and installed shell set with no questions and no provider probe; an installer rerun adds its invoking shell while preserving provider preferences and existing shell integrations. A repair or migration names each startup file it will change and asks at most once.
 
 `humansh setup --advanced` retains the full preference editor, exact managed-block review, OpenRouter configuration, executable pinning, and discovery of every compatible Zsh/Bash installation.
 
@@ -2116,7 +2116,7 @@ This must work immediately for development:
 ./scripts/install.sh --local
 ```
 
-No shell flag is needed: quick setup selects the usable login shell from `$SHELL`. `./scripts/install.sh --local --shell bash` or `--shell zsh` intentionally selects one integration; the installer passes that choice to setup. Run `humansh setup --advanced` to discover and configure every compatible shell.
+No shell flag is needed: quick setup selects the invoking Bash or Zsh session, falling back to the usable login shell from `$SHELL` when needed. An installer rerun from the other supported shell adds that integration without removing existing shell integrations. `./scripts/install.sh --local --shell bash` or `--shell zsh` intentionally selects one integration; the installer passes that choice to setup. Run `humansh setup --advanced` to discover and configure every compatible shell.
 
 It should:
 
@@ -2219,13 +2219,13 @@ Review
 
 Quick setup must:
 
-- Select the fresh install's login shell from `$SHELL`; an explicit `--shell` overrides it. Preserve all recorded integrations on a normal rerun.
+- Select the fresh install's invoking Bash or Zsh session, falling back to `$SHELL` when it cannot be identified; an explicit `--shell` overrides it. Preserve all recorded integrations on a normal direct rerun, and add the invoking shell to them on an installer rerun.
 - Discover Codex, Claude Code, and Cursor locally without inference. Select a sole ready CLI automatically; ask one compact provider question only when multiple candidates exist.
 - Separate provider choice, review, and completion with whitespace and short headings. Show only the effective shell/provider, each startup-file action, and the fixed review-before-execution safety statement as aligned review rows. Do not show control-mode jargon, quota-check explanations, successful shell versions, default preferences, full managed-block patches, or prose paragraphs.
 - Ask exactly one final confirmation before changing a startup file. Together with an optional provider choice, a normal fresh setup has at most two prompts.
 - Run the selected provider's constant minimal inference probe after confirmation and before writing anything. Never invoke login/logout/auth-status commands.
 - On success, print one short celebratory card with the advanced-settings command and one plain-language, shell-specific example line showing how to translate and run `list files`. The installer must not follow it with automatic onboarding.
-- On a healthy rerun, preserve configuration and installed shells, refresh Humansh-owned assets/state idempotently, and use zero prompts and zero provider probes.
+- On a healthy direct rerun, preserve configuration and installed shells, refresh Humansh-owned assets/state idempotently, and use zero prompts and zero provider probes. On an installer rerun from another supported shell, preserve provider preferences and existing integrations and review adding the invoking shell without another provider probe.
 - On repair or migration, name the startup files that will change and require at most one confirmation. A probe is unnecessary when preserving an existing provider.
 - Return nonzero without changes when shell discovery, provider selection/probing, preview, or cancellation fails. Every failed quick provider probe uses the generic provider-unavailable status; its wording must not select an exit code.
 
@@ -2713,7 +2713,8 @@ Run with a temporary `HOME` and XDG paths.
 Cover:
 
 - Fresh setup.
-- A fresh quick setup under a pseudo-terminal has at most one provider-choice prompt plus one confirmation, omits advanced sections/patches/onboarding, and configures only the login shell.
+- A fresh quick setup under a pseudo-terminal has at most one provider-choice prompt plus one confirmation, omits advanced sections/patches/onboarding, and configures only the invoking shell.
+- An installer rerun from Zsh after a Bash-only installation retains the unchanged Bash startup configuration and adds Zsh, regardless of the inherited `$SHELL` value.
 - The quick review omits control-mode jargon and provider-check/quota explanations; successful setup ends with one shell-specific `list files` example.
 - A healthy interactive rerun has zero prompts, preserves the config/startup file, and does not call the provider again.
 - Explicit Bash setup, Bash 3.x rejection, and migration between Zsh and Bash without stale managed blocks or assets.
@@ -3287,7 +3288,7 @@ Complete all phases in the same implementation effort; do not stop after a phase
 
 ### Phase 5: configuration-driven setup and diagnostics
 
-- Concise `humansh setup` with login-shell/provider discovery, at most two fresh-install prompts, and a zero-prompt healthy rerun; full discovery/customization under `--advanced`.
+- Concise `humansh setup` with invoking-shell/provider discovery, at most two fresh-install prompts, and a zero-prompt healthy rerun; full discovery/customization under `--advanced`.
 - Persist the installed shell/protocol set, keybindings, provider, provider model/auth mode, timeout/context/fallback settings, and versioned multi-shell install state.
 - Keychain/credential fallback.
 - `.zshrc`/`.bashrc` idempotent managed blocks and transactional multi-shell additions/removals.
@@ -3317,7 +3318,7 @@ The implementation is done only when:
 - Setup persists a complete typed configuration and install state; runtime modules receive immutable injected configuration rather than reading files globally.
 - Architecture/import-boundary tests run under `make test-architecture` and `make verify`.
 - A fresh user can install locally with one command from a checkout.
-- A fresh quick setup configures the usable login shell without asking the user to identify it; advanced setup discovers every usable supported shell and reports/skips an unavailable secondary shell.
+- A fresh quick setup configures the usable invoking shell without asking the user to identify it, falling back to `$SHELL` when needed; advanced setup discovers every usable supported shell and reports/skips an unavailable secondary shell.
 - Setup detects/configures at least one of Codex, Claude Code, Cursor CLI, or OpenRouter with minimal effort.
 - Clear Zsh commands run without an LLM call; Bash ordinary Enter never calls the LLM.
 - Natural language becomes a reviewed command in the existing Zsh or Bash buffer.

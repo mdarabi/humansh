@@ -147,6 +147,240 @@ func TestSetupFlowIsConciseAndHealthyRerunIsSilent(t *testing.T) {
 	}
 }
 
+// TestMakeInstallUsesInvokingShell is the end-to-end regression for the
+// shell-specific failures reported against `make install`: a fresh Bash install
+// used to trust an inherited $SHELL naming Zsh; a later Zsh install used to stop
+// at the recorded Bash integration; and Bash added after Zsh incorrectly showed
+// Zsh's Enter onboarding instead of Bash's Ctrl-G shortcut.
+func TestMakeInstallUsesInvokingShell(t *testing.T) {
+	if os.Getenv("HUMANSH_RUN_E2E") != "1" {
+		t.Skip("set HUMANSH_RUN_E2E=1 to run the installed-flow tests")
+	}
+	commands := make(map[string]string)
+	for _, name := range []string{"go", "make", "zsh"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			t.Fatalf("required E2E command %q is unavailable: %v", name, err)
+		}
+		commands[name] = path
+	}
+	if info, err := os.Stat("/bin/bash"); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("required E2E shell /bin/bash is unavailable: info=%v err=%v", info, err)
+	}
+
+	repo := repositoryRoot(t)
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	fixtureBin := filepath.Join(root, "bin")
+	for _, directory := range []string{home, fixtureBin} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fakeCodex := filepath.Join(fixtureBin, "codex")
+	build := exec.Command("go", "build", "-trimpath", "-o", fakeCodex, "./tests/e2e/testdata/fakecodex")
+	build.Dir = repo
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build deterministic Codex fixture: %v\n%s", err, output)
+	}
+	fakeBash := "#!/bin/sh\nprintf '%s\\n' 'GNU bash, version 5.3.15(1)-release'\n"
+	if err := os.WriteFile(filepath.Join(fixtureBin, "bash"), []byte(fakeBash), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	wrapper := filepath.Join(root, "run-installer-from-bash")
+	wrapperScript := "#!/bin/bash\n" + commands["make"] + " install\nstatus=$?\nprintf 'INSTALL_STATUS:%s\\n' \"$status\"\nexit 0\n"
+	if err := os.WriteFile(wrapper, []byte(wrapperScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	restrictedPath := strings.Join([]string{
+		fixtureBin,
+		filepath.Dir(commands["go"]),
+		filepath.Dir(commands["make"]),
+		"/usr/bin",
+		"/bin",
+	}, string(os.PathListSeparator))
+	env := setEnvironment(isolatedEnvironment(t, home, fixtureBin),
+		"HUMANSH_NONINTERACTIVE", "0",
+		"SHELL", "/bin/zsh",
+		"NO_COLOR", "1",
+		"TERM", "dumb",
+		"PATH", restrictedPath,
+	)
+
+	const script = `zmodload zsh/zpty || exit 90
+zpty -b I "$HUMANSH_E2E_WRAPPER"
+seen=''
+confirmed=0
+for attempt in {1..2000}; do
+  while zpty -r -t I chunk; do
+    seen+=$chunk
+    print -rn -- "$chunk"
+  done
+  if [[ $seen == *'Continue? [Y/n]:'* && $confirmed -eq 0 ]]; then
+    zpty -w -n I $'\r'
+    confirmed=1
+  fi
+  if [[ $seen == *'INSTALL_STATUS:'* ]]; then
+    while zpty -r -t I chunk; do
+      seen+=$chunk
+      print -rn -- "$chunk"
+    done
+    zpty -d I
+    exit 0
+  fi
+  sleep 0.01
+done
+print -ru2 -- "installer did not finish: ${(V)seen}"
+zpty -d I
+exit 91`
+	runInstaller := func(wrapperPath string, runEnv []string) string {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		command := exec.CommandContext(ctx, commands["zsh"], "-f", "-c", script)
+		command.Dir = repo
+		command.Env = setEnvironment(runEnv, "HUMANSH_E2E_WRAPPER", wrapperPath)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			if ctx.Err() != nil {
+				t.Fatalf("installer exceeded its timeout:\n%s", output)
+			}
+			t.Fatalf("installer failed in its PTY wrapper: %v\n%s", err, output)
+		}
+		return string(output)
+	}
+
+	text := runInstaller(wrapper, env)
+	for _, want := range []string{
+		"  Shell      Bash",
+		"  Startup    Update ~/.bashrc",
+		"  Try it: open a new terminal, type `list files`, press Ctrl-G to translate, then Enter to run.",
+		"INSTALL_STATUS:0",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Bash install output missing %q:\n%s", want, text)
+		}
+	}
+	for _, unwanted := range []string{"  Shell      Zsh", "~/.zshrc", "press Enter to translate"} {
+		if strings.Contains(text, unwanted) {
+			t.Errorf("Bash install output included Zsh-specific information %q:\n%s", unwanted, text)
+		}
+	}
+	bashrc := filepath.Join(home, ".bashrc")
+	startup, err := os.ReadFile(bashrc)
+	if err != nil || !strings.Contains(string(startup), "/shell/bash/humansh.bash") {
+		t.Fatalf("Bash install did not activate ~/.bashrc: err=%v\n%s\n%s", err, startup, text)
+	}
+	bashAssetPath := filepath.Join(home, "data", "humansh", "shell", "bash", "humansh.bash")
+	bashAsset, err := os.ReadFile(bashAssetPath)
+	if err != nil {
+		t.Fatalf("Bash install did not create its integration asset: %v\n%s", err, text)
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".zshrc"),
+		filepath.Join(home, "data", "humansh", "shell", "zsh", "humansh.zsh"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("Bash-only install created Zsh path %s: %v\n%s", path, err, text)
+		}
+	}
+
+	zshWrapper := filepath.Join(root, "run-installer-from-zsh")
+	zshWrapperScript := "#!" + commands["zsh"] + "\n" + commands["make"] + " install\ninstall_status=$?\nprintf 'INSTALL_STATUS:%s\\n' \"$install_status\"\nexit 0\n"
+	if err := os.WriteFile(zshWrapper, []byte(zshWrapperScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	zshText := runInstaller(zshWrapper, setEnvironment(env, "SHELL", "/bin/bash"))
+	for _, want := range []string{
+		"Review",
+		"  Shells     Zsh and Bash",
+		"  Provider   Codex",
+		"  Startup    Update ~/.zshrc",
+		"  Try it: open a new terminal, type `list files`, press Enter to translate, then Enter to run.",
+		"INSTALL_STATUS:0",
+	} {
+		if !strings.Contains(zshText, want) {
+			t.Errorf("Zsh reinstall output missing %q:\n%s", want, zshText)
+		}
+	}
+	for _, unwanted := range []string{"Existing setup kept", "Remove Humansh from ~/.bashrc", "Refresh ~/.bashrc", "press Ctrl-G to translate"} {
+		if strings.Contains(zshText, unwanted) {
+			t.Errorf("Zsh install unexpectedly changed the existing Bash integration %q:\n%s", unwanted, zshText)
+		}
+	}
+	bashStartup, err := os.ReadFile(bashrc)
+	if err != nil || string(bashStartup) != string(startup) {
+		t.Fatalf("Zsh install changed Bash activation: err=%v\nbefore=%s\nafter=%s\n%s", err, startup, bashStartup, zshText)
+	}
+	zshrc := filepath.Join(home, ".zshrc")
+	zshStartup, err := os.ReadFile(zshrc)
+	if err != nil || !strings.Contains(string(zshStartup), "/shell/zsh/humansh.zsh") {
+		t.Fatalf("Zsh reinstall did not activate ~/.zshrc: err=%v\n%s\n%s", err, zshStartup, zshText)
+	}
+	if _, err := os.Stat(filepath.Join(home, "data", "humansh", "shell", "zsh", "humansh.zsh")); err != nil {
+		t.Fatalf("Zsh install did not create its integration asset: %v\n%s", err, zshText)
+	}
+	bashAssetAfter, err := os.ReadFile(bashAssetPath)
+	if err != nil || string(bashAssetAfter) != string(bashAsset) {
+		t.Fatalf("Zsh install changed the Bash integration asset: err=%v\n%s", err, zshText)
+	}
+
+	reverseHome := filepath.Join(root, "reverse-home")
+	if err := os.MkdirAll(reverseHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reverseEnv := setEnvironment(isolatedEnvironment(t, reverseHome, fixtureBin),
+		"HUMANSH_NONINTERACTIVE", "0",
+		"SHELL", "/bin/bash",
+		"NO_COLOR", "1",
+		"TERM", "dumb",
+		"PATH", restrictedPath,
+	)
+	initialZshText := runInstaller(zshWrapper, reverseEnv)
+	for _, want := range []string{"  Shell      Zsh", "  Startup    Update ~/.zshrc", "press Enter to translate", "INSTALL_STATUS:0"} {
+		if !strings.Contains(initialZshText, want) {
+			t.Fatalf("initial Zsh install output missing %q:\n%s", want, initialZshText)
+		}
+	}
+	reverseZshrc := filepath.Join(reverseHome, ".zshrc")
+	reverseZshStartup, err := os.ReadFile(reverseZshrc)
+	if err != nil {
+		t.Fatalf("initial Zsh install did not activate ~/.zshrc: %v\n%s", err, initialZshText)
+	}
+	reverseZshAssetPath := filepath.Join(reverseHome, "data", "humansh", "shell", "zsh", "humansh.zsh")
+	reverseZshAsset, err := os.ReadFile(reverseZshAssetPath)
+	if err != nil {
+		t.Fatalf("initial Zsh install did not create its integration asset: %v\n%s", err, initialZshText)
+	}
+
+	bashAfterZshText := runInstaller(wrapper, setEnvironment(reverseEnv, "SHELL", "/bin/zsh"))
+	for _, want := range []string{
+		"Review",
+		"  Shells     Zsh and Bash",
+		"  Startup    Update ~/.bashrc",
+		"  Try it: open a new terminal, type `list files`, press Ctrl-G to translate, then Enter to run.",
+		"INSTALL_STATUS:0",
+	} {
+		if !strings.Contains(bashAfterZshText, want) {
+			t.Errorf("Bash-after-Zsh install output missing %q:\n%s", want, bashAfterZshText)
+		}
+	}
+	for _, unwanted := range []string{"Refresh ~/.zshrc", "Remove Humansh from ~/.zshrc", "press Enter to translate"} {
+		if strings.Contains(bashAfterZshText, unwanted) {
+			t.Errorf("Bash install used Zsh-specific onboarding or changed Zsh %q:\n%s", unwanted, bashAfterZshText)
+		}
+	}
+	reverseZshStartupAfter, err := os.ReadFile(reverseZshrc)
+	if err != nil || string(reverseZshStartupAfter) != string(reverseZshStartup) {
+		t.Fatalf("Bash install changed Zsh activation: err=%v\nbefore=%s\nafter=%s\n%s", err, reverseZshStartup, reverseZshStartupAfter, bashAfterZshText)
+	}
+	reverseZshAssetAfter, err := os.ReadFile(reverseZshAssetPath)
+	if err != nil || string(reverseZshAssetAfter) != string(reverseZshAsset) {
+		t.Fatalf("Bash install changed the Zsh integration asset: err=%v\n%s", err, bashAfterZshText)
+	}
+}
+
 // TestFreshInstallStopsCleanlyWhenProviderCheckFails is the end-to-end
 // regression for a fresh `make install` with a signed-out Cursor CLI. The old
 // flow interpreted Cursor's wording, prescribed a login command, and leaked
