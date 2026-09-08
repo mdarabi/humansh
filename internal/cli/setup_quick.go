@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,9 +19,10 @@ import (
 )
 
 // runQuickSetup is the default setup experience. It deliberately keeps
-// customization out of the happy path: select an installed provider only when
-// there is a real choice, show the shell file that will change, and ask for one
-// final confirmation. The full preference editor lives behind --advanced.
+// customization out of the happy path: select an available CLI provider or
+// explicitly configure OpenRouter, show the shell file that will change, and
+// ask for one final confirmation. The full preference editor lives behind
+// --advanced.
 func runQuickSetup(ctx context.Context, options setupOptions, rt bootstrap.Runtime, streams IO) int {
 	terminalInput := readerIsTerminal(streams.In)
 	interactive := terminalInput && !options.yes
@@ -64,15 +66,40 @@ func runQuickSetup(ctx context.Context, options setupOptions, rt bootstrap.Runti
 	}
 
 	probeProvider := !hasConfig || options.providerName != ""
+	var pendingOpenRouter *setupOpenRouterCredential
+	providerProbeComplete := false
 	if probeProvider {
-		selected, code := chooseQuickSetupProvider(ctx, cfg.Provider, options.providerName, options.yes, rt, ui)
-		if code != 0 {
-			if code == 130 {
-				printSetupCancellation(streams.Out, false)
+		for {
+			selected, code := chooseQuickSetupProvider(ctx, cfg.Provider, options.providerName, options.yes, rt, ui)
+			if code != 0 {
+				if code == 130 {
+					printSetupCancellation(streams.Out, pendingOpenRouter != nil)
+				}
+				return code
 			}
-			return code
+			if selected != llm.OpenRouter {
+				cfg.Provider = selected
+				break
+			}
+
+			probeComplete, credential, configureCode := prepareQuickSetupOpenRouter(ctx, rt, &cfg, ui)
+			if configureCode == setupChooseDifferentProvider {
+				if options.providerName != "" {
+					_, _, requiredCode := setupProviderRequired(ui)
+					return requiredCode
+				}
+				continue
+			}
+			if configureCode != 0 {
+				if configureCode == 130 {
+					printSetupCancellation(streams.Out, credential != nil)
+				}
+				return configureCode
+			}
+			pendingOpenRouter = credential
+			providerProbeComplete = probeComplete
+			break
 		}
-		cfg.Provider = selected
 	} else if _, ok := rt.Engine.Providers.Get(cfg.Provider); !ok {
 		fmt.Fprintf(streams.Err, "humansh: configured provider %q is unavailable in this build.\nNothing was changed or executed.\nNext: run `humansh setup --advanced` to choose another provider.\n", cfg.Provider)
 		return protocol.ExitConfig
@@ -105,7 +132,7 @@ func runQuickSetup(ctx context.Context, options setupOptions, rt bootstrap.Runti
 	defaultRerun := hasConfig && hasState && options.providerName == "" && options.shellName == "" && !options.repair
 	startupChanged := quickStartupChanged(reviewedStartups) || len(reviewedRemovals) > 0
 	if defaultRerun && !startupChanged {
-		if err := applyQuickSetup(rt, cfg, targetShells, reviewedStartups, reviewedRemovals, options); err != nil {
+		if err := applyQuickSetup(rt, cfg, targetShells, reviewedStartups, reviewedRemovals, options, nil, streams.Err); err != nil {
 			printQuickSetupApplyError(err, streams)
 			return protocol.ExitConfig
 		}
@@ -117,20 +144,20 @@ func runQuickSetup(ctx context.Context, options setupOptions, rt bootstrap.Runti
 	if hasState {
 		installedShells = state.ShellIDs()
 	}
-	printQuickSetupPlan(cfg, targetShells, reviewedStartups, reviewedRemovals, options.noShellChange, installedShells, ui)
+	printQuickSetupPlan(cfg, targetShells, reviewedStartups, reviewedRemovals, options.noShellChange, installedShells, pendingOpenRouter, ui)
 	if ui.interactive {
 		apply, promptErr := ui.askYesNo("Continue?", true)
 		if promptErr != nil || !apply {
-			printSetupCancellation(streams.Out, false)
+			printSetupCancellation(streams.Out, pendingOpenRouter != nil)
 			return 130
 		}
 	}
 	if ctx.Err() != nil {
-		printSetupCancellation(streams.Out, false)
+		printSetupCancellation(streams.Out, pendingOpenRouter != nil)
 		return 130
 	}
 
-	if probeProvider {
+	if probeProvider && !providerProbeComplete {
 		if code := probeQuickSetupProvider(ctx, rt, cfg.Provider, ui); code != 0 {
 			if code == 130 {
 				printSetupCancellation(streams.Out, false)
@@ -139,9 +166,12 @@ func runQuickSetup(ctx context.Context, options setupOptions, rt bootstrap.Runti
 		}
 	}
 
-	if err := applyQuickSetup(rt, cfg, targetShells, reviewedStartups, reviewedRemovals, options); err != nil {
+	if err := applyQuickSetup(rt, cfg, targetShells, reviewedStartups, reviewedRemovals, options, pendingOpenRouter, streams.Err); err != nil {
 		printQuickSetupApplyError(err, streams)
 		return protocol.ExitConfig
+	}
+	if pendingOpenRouter != nil && pendingOpenRouter.storage != "" {
+		ui.success("OpenRouter API key saved to " + pendingOpenRouter.storage + ".")
 	}
 
 	if options.noShellChange {
@@ -320,32 +350,20 @@ func otherQuickShell(id shell.ID) shell.ID {
 }
 
 func chooseQuickSetupProvider(ctx context.Context, current llm.ProviderID, explicit string, yes bool, rt bootstrap.Runtime, ui *setupUI) (llm.ProviderID, int) {
-	order := []llm.ProviderID{llm.Codex, llm.Claude, llm.Cursor}
+	order := []llm.ProviderID{llm.Codex, llm.Claude, llm.Cursor, llm.OpenRouter}
 	if explicit != "" {
 		id := llm.ProviderID(strings.ToLower(explicit))
 		if id != llm.Codex && id != llm.Claude && id != llm.Cursor && id != llm.OpenRouter {
 			fmt.Fprintf(ui.streams.Err, "Unknown provider %q. Choose codex, claude, cursor, or openrouter.\n", explicit)
 			return "", 2
 		}
-		if id == llm.OpenRouter {
-			provider, ok := rt.Engine.Providers.Get(id)
-			if ok {
-				diagnostic := provider.Diagnose(ctx)
-				if ctx.Err() != nil {
-					return "", 130
-				}
-				if diagnostic.Available {
-					return id, 0
-				}
-			}
-			ui.warning("OpenRouter setup needs an API key and model choice.")
-			ui.note("Next: run `humansh setup --advanced --provider openrouter`.")
-			return "", protocol.ExitProviderUnavailable
-		}
 		provider, ok := rt.Engine.Providers.Get(id)
 		if !ok {
 			fmt.Fprintf(ui.streams.Err, "%s is unavailable in this build.\n", setupProviderName(id))
 			return "", protocol.ExitProviderUnavailable
+		}
+		if id == llm.OpenRouter {
+			return id, 0
 		}
 		diagnostic := provider.Diagnose(ctx)
 		if ctx.Err() != nil {
@@ -360,40 +378,44 @@ func chooseQuickSetupProvider(ctx context.Context, current llm.ProviderID, expli
 		return id, 0
 	}
 
-	ready := make([]llm.ProviderID, 0, len(order))
+	choices := make([]llm.ProviderID, 0, len(order))
 	for _, id := range order {
 		provider, ok := rt.Engine.Providers.Get(id)
 		if !ok {
 			continue
 		}
+		if id == llm.OpenRouter {
+			choices = append(choices, id)
+			continue
+		}
 		diagnostic := provider.Diagnose(ctx)
 		if setupProviderSelectable(id, diagnostic) {
-			ready = append(ready, id)
+			choices = append(choices, id)
 		}
 	}
 	if ctx.Err() != nil {
 		return "", 130
 	}
-	if len(ready) == 0 {
+	if len(choices) == 0 {
 		_, _, code := setupProviderRequired(ui)
 		return "", code
 	}
-	if len(ready) == 1 {
-		return ready[0], 0
+	if len(choices) == 1 {
+		return choices[0], 0
 	}
 
 	defaultChoice := 0
-	for index, id := range ready {
+	for index, id := range choices {
 		if id == current {
 			defaultChoice = index
 		}
 	}
 	if !ui.interactive || yes {
-		return ready[defaultChoice], 0
+		return choices[defaultChoice], 0
 	}
 
 	quickSetupSection(ui, "Choose your AI provider")
-	for index, id := range ready {
+	for index, id := range choices {
 		defaultLabel := ""
 		if index == defaultChoice {
 			defaultLabel = ui.paint(ansiDim, "default")
@@ -407,19 +429,56 @@ func chooseQuickSetupProvider(ctx context.Context, current llm.ProviderID, expli
 			return "", 130
 		}
 		if answer == "" {
-			return ready[defaultChoice], 0
+			return choices[defaultChoice], 0
 		}
-		for index, id := range ready {
+		for index, id := range choices {
 			if answer == strconv.Itoa(index+1) || strings.EqualFold(answer, string(id)) || strings.EqualFold(answer, setupProviderName(id)) {
 				return id, 0
 			}
 		}
-		choices := make([]string, 0, len(ready))
-		for index := range ready {
-			choices = append(choices, strconv.Itoa(index+1))
+		numbers := make([]string, 0, len(choices))
+		for index := range choices {
+			numbers = append(numbers, strconv.Itoa(index+1))
 		}
-		ui.warning("Choose " + strings.Join(choices, ", ") + ", or type a provider name.")
+		ui.warning("Choose " + strings.Join(numbers, ", ") + ", or type a provider name.")
 	}
+}
+
+// prepareQuickSetupOpenRouter reuses the complete OpenRouter configuration
+// flow from advanced setup. A previously proven model and available key can go
+// through the normal quick provider probe; a new configuration is already
+// proven by configureSetupOpenRouter and must not incur a second metered call.
+func prepareQuickSetupOpenRouter(ctx context.Context, rt bootstrap.Runtime, cfg *config.RuntimeConfig, ui *setupUI) (bool, *setupOpenRouterCredential, int) {
+	modelProven := cfg.OpenRouter.Model != "" && cfg.OpenRouter.StructuredOutputProven && cfg.OpenRouter.StructuredOutputModel == cfg.OpenRouter.Model
+	if modelProven {
+		key, keyErr := config.LoadOpenRouterKey(rt.Paths)
+		if keyErr == nil && key != "" {
+			cfg.Provider = llm.OpenRouter
+			return false, nil, 0
+		}
+	}
+	if !ui.interactive {
+		key, keyErr := config.LoadOpenRouterKey(rt.Paths)
+		ui.warning("OpenRouter setup needs an API key and model choice.")
+		if keyErr != nil {
+			ui.note("The existing OpenRouter credential could not be loaded safely.")
+		} else if key == "" {
+			ui.note("Set OPENROUTER_API_KEY in the environment, or rerun setup interactively to paste a key securely.")
+		}
+		ui.note("Next: run `humansh setup --provider openrouter` from a terminal.")
+		_, _, requiredCode := setupProviderRequired(ui)
+		return false, nil, requiredCode
+	}
+
+	ready, credential, code := configureSetupOpenRouter(ctx, rt, cfg, ui)
+	if code != 0 {
+		return false, credential, code
+	}
+	if !ready {
+		_, _, requiredCode := setupProviderRequired(ui)
+		return false, credential, requiredCode
+	}
+	return true, credential, 0
 }
 
 func quickStartupChanged(changes []config.StartupChange) bool {
@@ -431,7 +490,7 @@ func quickStartupChanged(changes []config.StartupChange) bool {
 	return false
 }
 
-func printQuickSetupPlan(cfg config.RuntimeConfig, targetShells []shell.ID, startups, removals []config.StartupChange, noShellChange bool, installedShells []shell.ID, ui *setupUI) {
+func printQuickSetupPlan(cfg config.RuntimeConfig, targetShells []shell.ID, startups, removals []config.StartupChange, noShellChange bool, installedShells []shell.ID, pendingOpenRouter *setupOpenRouterCredential, ui *setupUI) {
 	quickSetupSection(ui, "Review")
 	label := "Shell"
 	if len(targetShells) > 1 {
@@ -439,6 +498,17 @@ func printQuickSetupPlan(cfg config.RuntimeConfig, targetShells []shell.ID, star
 	}
 	quickSetupRow(ui, label, shellNames(targetShells))
 	quickSetupRow(ui, "Provider", setupProviderName(cfg.Provider))
+	if cfg.Provider == llm.OpenRouter {
+		quickSetupRow(ui, "Model", cfg.OpenRouter.Model)
+		keySource := "Stored key"
+		switch {
+		case pendingOpenRouter != nil && pendingOpenRouter.key != "":
+			keySource = "New key — save securely after confirmation"
+		case os.Getenv("OPENROUTER_API_KEY") != "":
+			keySource = "OPENROUTER_API_KEY from shell"
+		}
+		quickSetupRow(ui, "API key", keySource)
+	}
 
 	startupSummaries := make([]string, 0, len(startups)+len(removals))
 	if noShellChange {
@@ -504,16 +574,18 @@ func printQuickSetupProviderFailure(id llm.ProviderID, diagnostic llm.Diagnostic
 	fmt.Fprintln(ui.streams.Out, "  No Humansh settings were changed.")
 }
 
-func applyQuickSetup(rt bootstrap.Runtime, cfg config.RuntimeConfig, targetShells []shell.ID, startups, removals []config.StartupChange, options setupOptions) error {
+func applyQuickSetup(rt bootstrap.Runtime, cfg config.RuntimeConfig, targetShells []shell.ID, startups, removals []config.StartupChange, options setupOptions, pendingOpenRouter *setupOpenRouterCredential, errOut io.Writer) error {
 	apply := func() error {
-		_, err := config.SetupWithOptions(rt.Paths, cfg, version.Version, config.SetupOptions{
-			NoShellChange:    options.noShellChange,
-			Repair:           options.repair,
-			Shells:           targetShells,
-			ReviewedStartups: startups,
-			ReviewedRemovals: removals,
+		return applySetupWithOpenRouterCredential(rt.Paths, pendingOpenRouter, errOut, func() error {
+			_, err := config.SetupWithOptions(rt.Paths, cfg, version.Version, config.SetupOptions{
+				NoShellChange:    options.noShellChange,
+				Repair:           options.repair,
+				Shells:           targetShells,
+				ReviewedStartups: startups,
+				ReviewedRemovals: removals,
+			})
+			return err
 		})
-		return err
 	}
 	if options.repair {
 		return apply()

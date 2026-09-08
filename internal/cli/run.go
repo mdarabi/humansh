@@ -979,26 +979,11 @@ func runAdvancedSetup(ctx context.Context, options setupOptions, rt bootstrap.Ru
 		return 130
 	}
 
-	applySetup := func() (setupErr error) {
-		credentialStored := false
-		if pendingOpenRouter != nil && pendingOpenRouter.key != "" {
-			storage, persistErr := config.PersistOpenRouterKey(rt.Paths, pendingOpenRouter.key, true, streams.Err)
-			if persistErr != nil {
-				return fmt.Errorf("save OpenRouter API key: %w", persistErr)
-			}
-			pendingOpenRouter.storage = storage
-			credentialStored = true
-		}
-		defer func() {
-			if setupErr == nil || !credentialStored {
-				return
-			}
-			if rollbackErr := config.DeleteOpenRouterKey(rt.Paths); rollbackErr != nil {
-				setupErr = errors.Join(setupErr, fmt.Errorf("roll back OpenRouter API key: %w", rollbackErr))
-			}
-		}()
-		_, setupErr = config.SetupWithOptions(rt.Paths, cfg, version.Version, config.SetupOptions{NoShellChange: effectiveNoShellChange, Repair: options.repair, Shells: targetShells, ReviewedStartups: reviewedStartups, ReviewedRemovals: reviewedRemovals})
-		return setupErr
+	applySetup := func() error {
+		return applySetupWithOpenRouterCredential(rt.Paths, pendingOpenRouter, streams.Err, func() error {
+			_, setupErr := config.SetupWithOptions(rt.Paths, cfg, version.Version, config.SetupOptions{NoShellChange: effectiveNoShellChange, Repair: options.repair, Shells: targetShells, ReviewedStartups: reviewedStartups, ReviewedRemovals: reviewedRemovals})
+			return setupErr
+		})
 	}
 	var err error
 	if options.repair {
@@ -1043,6 +1028,27 @@ func runAdvancedSetup(ctx context.Context, options setupOptions, rt bootstrap.Ru
 type setupOpenRouterCredential struct {
 	key     string
 	storage string
+}
+
+func applySetupWithOpenRouterCredential(paths config.Paths, pending *setupOpenRouterCredential, errOut io.Writer, apply func() error) (setupErr error) {
+	credentialStored := false
+	if pending != nil && pending.key != "" {
+		storage, persistErr := config.PersistOpenRouterKey(paths, pending.key, true, errOut)
+		if persistErr != nil {
+			return fmt.Errorf("save OpenRouter API key: %w", persistErr)
+		}
+		pending.storage = storage
+		credentialStored = true
+	}
+	defer func() {
+		if setupErr == nil || !credentialStored {
+			return
+		}
+		if rollbackErr := config.DeleteOpenRouterKey(paths); rollbackErr != nil {
+			setupErr = errors.Join(setupErr, fmt.Errorf("roll back OpenRouter API key: %w", rollbackErr))
+		}
+	}()
+	return apply()
 }
 
 func shellDisplayName(id shell.ID) string {
@@ -1272,7 +1278,7 @@ func configureSetupOpenRouter(ctx context.Context, rt bootstrap.Runtime, cfg *co
 	ui.note("OpenRouter is metered: each translation uses API credits, not a Codex or Claude subscription.")
 	fmt.Fprintln(ui.streams.Out, "  1. Open https://openrouter.ai/settings/keys, sign in, create a key, and copy it.")
 	fmt.Fprintln(ui.streams.Out, "  2. Open https://openrouter.ai/models and copy the model ID shown as provider/model.")
-	ui.note("Paste both values below. Humansh validates the key and model capability for free, then runs one small automatic compatibility request before saving anything.")
+	ui.note("Humansh uses OPENROUTER_API_KEY when it is set; otherwise it securely asks for a key. It validates the key and model capability for free, then runs one small automatic compatibility request before saving anything.")
 
 	if rt.ProviderSetup == nil {
 		fmt.Fprintln(ui.streams.Err, "humansh: OpenRouter setup is unavailable in this build.")
@@ -1286,6 +1292,7 @@ func configureSetupOpenRouter(ctx context.Context, rt bootstrap.Runtime, cfg *co
 	}
 	credential := &setupOpenRouterCredential{}
 	if key == "" {
+		ui.note("To avoid storing a key, set OPENROUTER_API_KEY in this shell and rerun setup; otherwise paste it securely now.")
 		for {
 			key, err = ui.promptSecret("Paste OpenRouter API key (input hidden)")
 			if err != nil {
