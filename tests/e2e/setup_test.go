@@ -50,7 +50,6 @@ func TestSetupFlowIsConciseAndHealthyRerunIsSilent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-
 	probeLog := filepath.Join(providerBin, "humansh-e2e-probes.log")
 	env := setEnvironment(os.Environ(),
 		"HOME", home,
@@ -75,6 +74,7 @@ func TestSetupFlowIsConciseAndHealthyRerunIsSilent(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Choose your AI provider",
+		"  4  OpenRouter",
 		"Review",
 		"  Shell      Zsh",
 		"  Provider   Codex",
@@ -102,8 +102,8 @@ func TestSetupFlowIsConciseAndHealthyRerunIsSilent(t *testing.T) {
 		}
 		previous = index
 	}
-	if lines := nonemptySetupLines(first); lines > 20 {
-		t.Fatalf("first setup printed %d non-empty lines, want at most 20:\n%s", lines, first)
+	if lines := nonemptySetupLines(first); lines > 21 {
+		t.Fatalf("first setup printed %d non-empty lines, want at most 21:\n%s", lines, first)
 	}
 	if probes := setupProbeCount(t, probeLog); probes != 1 {
 		t.Fatalf("first setup provider probes=%d, want 1", probes)
@@ -144,6 +144,118 @@ func TestSetupFlowIsConciseAndHealthyRerunIsSilent(t *testing.T) {
 	afterStartup, err := os.ReadFile(zshrc)
 	if err != nil || string(afterStartup) != string(beforeStartup) {
 		t.Fatalf("healthy setup rerun changed .zshrc: err=%v\nbefore=%s\nafter=%s", err, beforeStartup, afterStartup)
+	}
+}
+
+// TestDefaultSetupOpenRouterOptionHandlesKeySources is the end-to-end
+// regression for the quick-setup refactor that dropped OpenRouter from the
+// provider menu. Selecting option 4 must enter the inline secure setup flow:
+// prompt for a missing key, or use OPENROUTER_API_KEY without asking for it.
+func TestDefaultSetupOpenRouterOptionHandlesKeySources(t *testing.T) {
+	if os.Getenv("HUMANSH_RUN_E2E") != "1" {
+		t.Skip("set HUMANSH_RUN_E2E=1 to run the installed-flow tests")
+	}
+	for _, command := range []string{"go", "zsh"} {
+		if _, err := exec.LookPath(command); err != nil {
+			t.Fatalf("required E2E command %q is unavailable: %v", command, err)
+		}
+	}
+
+	repo := repositoryRoot(t)
+	root := t.TempDir()
+	providerBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(providerBin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(root, "humansh")
+	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/humansh")
+	build.Dir = repo
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build Humansh: %v\n%s", err, output)
+	}
+	fakeCodex := filepath.Join(providerBin, "codex")
+	build = exec.Command("go", "build", "-trimpath", "-o", fakeCodex, "./tests/e2e/testdata/fakecodex")
+	build.Dir = repo
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build deterministic provider fixture: %v\n%s", err, output)
+	}
+	for _, name := range []string{"claude", "cursor-agent"} {
+		if err := os.Symlink(fakeCodex, filepath.Join(providerBin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Keep a developer's real macOS Keychain entry out of this isolated E2E
+	// environment while retaining /usr/bin for portable shell diagnostics.
+	if err := os.WriteFile(filepath.Join(providerBin, "security"), []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		key      string
+		expected string
+		want     []string
+		unwanted []string
+	}{
+		{
+			name:     "missing key",
+			expected: "Paste OpenRouter API key (input hidden):",
+			want: []string{
+				"4  OpenRouter",
+				"set OPENROUTER_API_KEY in this shell and rerun setup",
+				"Paste OpenRouter API key (input hidden):",
+			},
+			unwanted: []string{"Using OPENROUTER_API_KEY from this shell"},
+		},
+		{
+			name:     "environment key",
+			key:      "sk-or-e2e-environment-secret",
+			expected: "OpenRouter model ID (provider/model) [required]:",
+			want: []string{
+				"4  OpenRouter",
+				"Using OPENROUTER_API_KEY from this shell; humansh will not persist it.",
+				"OpenRouter model ID (provider/model) [required]:",
+			},
+			unwanted: []string{"Paste OpenRouter API key (input hidden):", "sk-or-e2e-environment-secret"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			home := filepath.Join(root, strings.ReplaceAll(test.name, " ", "-"))
+			if err := os.MkdirAll(home, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			env := setEnvironment(os.Environ(),
+				"HOME", home,
+				"ZDOTDIR", home,
+				"XDG_CONFIG_HOME", filepath.Join(home, "config"),
+				"XDG_DATA_HOME", filepath.Join(home, "data"),
+				"XDG_CACHE_HOME", filepath.Join(home, "cache"),
+				"CODEX_HOME", filepath.Join(home, "codex"),
+				"OPENROUTER_API_KEY", test.key,
+				"SHELL", "/bin/zsh",
+				"NO_COLOR", "1",
+				"TERM", "dumb",
+				"PATH", providerBin+string(os.PathListSeparator)+"/usr/bin:/bin",
+			)
+
+			output := runSetupUntilPromptInPTY(t, binary, env, test.expected)
+			for _, want := range test.want {
+				if !strings.Contains(output, want) {
+					t.Errorf("OpenRouter quick setup missing %q:\n%s", want, output)
+				}
+			}
+			for _, unwanted := range test.unwanted {
+				if strings.Contains(output, unwanted) {
+					t.Errorf("OpenRouter quick setup exposed unwanted %q:\n%s", unwanted, output)
+				}
+			}
+			for _, path := range []string{filepath.Join(home, ".zshrc"), filepath.Join(home, "config", "humansh", "config.toml")} {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Errorf("OpenRouter setup changed %s before final confirmation: %v", path, err)
+				}
+			}
+		})
 	}
 }
 
@@ -317,6 +429,47 @@ exit 92`
 			t.Fatalf("setup PTY exceeded its timeout:\n%s", output)
 		}
 		t.Fatalf("setup PTY failed: %v\n%s", err, output)
+	}
+	return string(output)
+}
+
+func runSetupUntilPromptInPTY(t *testing.T, binary string, env []string, expected string) string {
+	t.Helper()
+	const script = `zmodload zsh/zpty || exit 90
+zpty -b O "$HUMANSH_SETUP_BINARY" setup
+seen=''
+selected=0
+for attempt in {1..1000}; do
+  while zpty -r -t O chunk; do seen+=$chunk; done
+  if [[ $seen == *'AI provider [1]:'* && $selected -eq 0 ]]; then
+    zpty -w -n O $'4\r'
+    selected=1
+  fi
+  if [[ $seen == *"$HUMANSH_SETUP_EXPECTED"* ]]; then
+    while zpty -r -t O chunk; do seen+=$chunk; done
+    print -r -- "$seen"
+    zpty -d O
+    exit 0
+  fi
+  sleep 0.01
+done
+print -ru2 -- "OpenRouter setup did not reach expected prompt: ${(V)seen}"
+zpty -d O
+exit 92`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "zsh", "-f", "-c", script)
+	command.Env = setEnvironment(env,
+		"HUMANSH_SETUP_BINARY", binary,
+		"HUMANSH_SETUP_EXPECTED", expected,
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		if ctx.Err() != nil {
+			t.Fatalf("OpenRouter setup PTY exceeded its timeout:\n%s", output)
+		}
+		t.Fatalf("OpenRouter setup PTY failed: %v\n%s", err, output)
 	}
 	return string(output)
 }

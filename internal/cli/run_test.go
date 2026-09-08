@@ -441,6 +441,92 @@ func TestQuickSetupFallsBackToAnAvailableShellWhenLoginShellIsUnknown(t *testing
 	}
 }
 
+func TestQuickSetupProviderMenuRestoresOpenRouterAsFourthOption(t *testing.T) {
+	ready := llm.Diagnostic{Installed: true, Configured: true, Authenticated: true, Available: true, AuthMode: "provider_managed"}
+	providers := llm.MapRegistry{
+		llm.Codex:      &setupTestProvider{id: llm.Codex, diagnostic: ready},
+		llm.Claude:     &setupTestProvider{id: llm.Claude, diagnostic: ready},
+		llm.Cursor:     &setupTestProvider{id: llm.Cursor, diagnostic: ready},
+		llm.OpenRouter: &setupTestProvider{id: llm.OpenRouter, diagnostic: llm.Diagnostic{Installed: true, AuthMode: "missing"}},
+	}
+	runtime := bootstrap.Runtime{Engine: app.Engine{Providers: providers}}
+	var out, errOut bytes.Buffer
+	ui := interactiveSetupUI("4\n", &out, &errOut)
+
+	selected, code := chooseQuickSetupProvider(context.Background(), llm.Codex, "", false, runtime, ui)
+	if code != 0 || selected != llm.OpenRouter || errOut.Len() != 0 {
+		t.Fatalf("selected=%s code=%d out=%s err=%s", selected, code, out.String(), errOut.String())
+	}
+	text := out.String()
+	for _, want := range []string{"1  Codex", "2  Claude Code", "3  Cursor CLI", "4  OpenRouter", "AI provider [1]:"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("quick provider menu missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestQuickSetupOpenRouterPromptsForMissingKeyAndStagesIt(t *testing.T) {
+	isolatedEnv(t)
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("PATH", t.TempDir())
+	paths, err := config.ResolvePaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	setup := &recordingProviderSetup{}
+	runtime := bootstrap.Runtime{Paths: paths, ProviderSetup: setup}
+	cfg := config.Default()
+	var out, errOut bytes.Buffer
+	ui := interactiveSetupUI("sk-or-quick-test\nprovider/quick-model\n", &out, &errOut)
+
+	probeComplete, pending, code := prepareQuickSetupOpenRouter(context.Background(), runtime, &cfg, ui)
+	if code != 0 || !probeComplete || pending == nil || pending.key != "sk-or-quick-test" {
+		t.Fatalf("probeComplete=%t pending=%+v code=%d out=%s err=%s", probeComplete, pending, code, out.String(), errOut.String())
+	}
+	if cfg.Provider != llm.OpenRouter || cfg.OpenRouter.Model != "provider/quick-model" || !cfg.OpenRouter.StructuredOutputProven {
+		t.Fatalf("OpenRouter was not staged in quick setup: %+v", cfg)
+	}
+	for _, want := range []string{"OPENROUTER_API_KEY", "Paste OpenRouter API key (input hidden)", "OpenRouter is ready with provider/quick-model"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("quick OpenRouter setup missing %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), pending.key) {
+		t.Fatalf("quick OpenRouter setup echoed the API key:\n%s", out.String())
+	}
+	if _, err := os.Stat(paths.Credentials); !os.IsNotExist(err) {
+		t.Fatalf("quick setup persisted the key before confirmation: %v", err)
+	}
+}
+
+func TestQuickSetupOpenRouterUsesEnvironmentKeyWithoutPromptingForIt(t *testing.T) {
+	isolatedEnv(t)
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-environment-test")
+	paths, err := config.ResolvePaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	setup := &recordingProviderSetup{}
+	runtime := bootstrap.Runtime{Paths: paths, ProviderSetup: setup}
+	cfg := config.Default()
+	var out, errOut bytes.Buffer
+	ui := interactiveSetupUI("provider/environment-model\n", &out, &errOut)
+
+	probeComplete, pending, code := prepareQuickSetupOpenRouter(context.Background(), runtime, &cfg, ui)
+	if code != 0 || !probeComplete || pending == nil || pending.key != "" {
+		t.Fatalf("probeComplete=%t pending=%+v code=%d out=%s err=%s", probeComplete, pending, code, out.String(), errOut.String())
+	}
+	if setup.validatedKey != "sk-or-environment-test" || setup.probedKey != "sk-or-environment-test" {
+		t.Fatalf("quick setup did not use the environment key: %+v", setup)
+	}
+	if !strings.Contains(out.String(), "Using OPENROUTER_API_KEY from this shell") {
+		t.Fatalf("environment key source was not shown:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "Paste OpenRouter API key (input hidden):") || strings.Contains(out.String(), "sk-or-environment-test") {
+		t.Fatalf("environment-backed setup prompted for or exposed the key:\n%s", out.String())
+	}
+}
+
 func TestSetupShellVersionLabelsAreConcise(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

@@ -1,6 +1,6 @@
 # Setup
 
-`humansh setup` uses a short default path and keeps detailed customization behind `humansh setup --advanced`. A fresh default setup asks at most two questions: which installed provider to use when there is a real choice, and whether to apply the summarized startup-file change. Nothing is written before confirmation.
+`humansh setup` uses a short default path and keeps detailed customization behind `humansh setup --advanced`. The normal CLI-provider path asks which provider to use and whether to apply the summarized startup-file change. Choosing the explicit metered OpenRouter option additionally asks for any missing API key and concrete model. Nothing is written before confirmation.
 
 ## Installing
 
@@ -58,7 +58,7 @@ Each managed block exports the resolved binding values before sourcing its immut
 
 ## The default flow
 
-On a fresh machine, setup silently checks the login shell and installed CLI providers. If exactly one provider is usable, it selects it automatically. If several are usable, it asks one provider question. The flow separates provider choice, review, and the final next step instead of presenting a block of explanatory prose:
+On a fresh machine, setup silently checks the login shell and installed CLI providers. Interactive setup lists the usable CLI providers followed by OpenRouter as the explicit metered choice. If no CLI provider is available, it proceeds directly to OpenRouter configuration. The flow separates provider choice, review, and the final next step instead of presenting a block of explanatory prose:
 
 ```text
 humansh setup
@@ -68,6 +68,7 @@ Choose your AI provider
   1  Codex       default
   2  Claude Code
   3  Cursor CLI
+  4  OpenRouter
 
   AI provider [1]:
 
@@ -88,7 +89,7 @@ Review
   Try it: open a new terminal, type `list files`, press Enter to translate, then Enter to run.
 ```
 
-After confirmation, setup runs one minimal provider check, applies the already prepared startup-file plan, and ends with one example showing how to start. A healthy rerun preserves the saved provider, preferences, and installed shell set; it asks no questions and does not spend provider quota on another live check. If an update or repair would change a startup file, setup names the exact file and asks once.
+For CLI providers, setup runs one minimal provider check after confirmation, applies the already prepared startup-file plan, and ends with one example showing how to start. OpenRouter performs its disclosed key, model-capability, and compatibility checks before review because only a proven concrete model can be saved; a pasted key remains in memory until confirmation. A healthy rerun preserves the saved provider, preferences, and installed shell set; it asks no questions and does not spend provider quota on another live check. If an update or repair would change a startup file, setup names the exact file and asks once.
 
 `--yes` accepts the concise plan non-interactively. `NO_COLOR=1` disables styling. Provider checks show an in-place loader on a terminal; redirected output gets one stable `Checking…` line instead.
 
@@ -98,13 +99,13 @@ Setup preserves startup-file symlinks, applies all shell changes transactionally
 
 Run `humansh setup --advanced` to use the full six-section editor. It exposes shell compatibility, provider and executable selection, model, directory-context privacy, timeout, Smart Enter, and shortcuts, followed by the exact managed-block patch and final confirmation. At a shortcut prompt, type a readable value such as `Ctrl-G`, `Ctrl-X Ctrl-T`, or `Esc t`.
 
-OpenRouter key/model configuration and pinning a particular Claude or Cursor executable also live in the advanced flow. Existing command flags such as `--provider`, `--shell`, `--repair`, and `--no-shell-change` remain available; combine provider-specific customization with `--advanced` when the quick path directs you there.
+OpenRouter key/model configuration is available directly from the default provider menu. The advanced flow also supports it and is where a particular Claude or Cursor executable can be pinned. Existing command flags such as `--provider`, `--shell`, `--repair`, and `--no-shell-change` remain available.
 
 ## Providers during setup
 
-Quick setup asks about providers only when multiple installed CLI providers are usable. With one candidate it selects that provider automatically. A healthy existing setup silently retains the saved provider. Advanced setup shows the full four-provider menu and uses the saved provider as its default answer.
+Quick setup lists usable CLI providers and appends OpenRouter as the metered choice. Selecting OpenRouter uses `OPENROUTER_API_KEY` without persisting it when the variable is set; otherwise it explains that option and reads a key without echo. It then asks for a concrete `provider/model` ID and runs the existing validation and compatibility checks. A healthy existing setup silently retains the saved provider. Advanced setup shows the full four-provider menu and uses the saved provider as its default answer.
 
-Provider discovery is non-inference: it checks whether each CLI executable exists without calling optional login, status, version, or help commands. After confirmation, fresh quick setup sends one fixed minimal prompt through a fresh isolated subprocess. That live check may consume a small amount of provider quota.
+Provider discovery is non-inference: it checks whether each CLI executable exists without calling optional login, status, version, or help commands. After confirmation, a fresh CLI-provider quick setup sends one fixed minimal prompt through a fresh isolated subprocess. That live check may consume a small amount of provider quota. OpenRouter uses the separately disclosed pre-review compatibility check described above.
 
 Authentication belongs to the selected CLI distribution. Humansh neither infers its billing mode nor starts a login flow. This supports centrally managed corporate distributions whose inference command works while login subcommands are intentionally disabled. If a quick-flow probe fails, setup shows the provider's message verbatim after credential/control filtering and length bounding. It does not categorize the wording or derive provider-specific recovery commands. Setup makes no changes and asks the user to fix the provider issue before retrying.
 
@@ -114,7 +115,7 @@ A fresh setup or explicit provider change requires **one live, responding provid
 
 ### OpenRouter
 
-`humansh setup --advanced --provider openrouter` configures OpenRouter in place; the standalone `humansh provider configure openrouter` remains available for changing the model later. Both flows:
+Choosing OpenRouter in the default menu or running `humansh setup --advanced --provider openrouter` configures it in place; the standalone `humansh provider configure openrouter` remains available for changing the model later. These flows:
 
 1. Accept the key without echo and validate it through the read-only key-status endpoint.
 2. Use read-only model metadata to require `structured_outputs`, not merely basic `response_format` support. Incompatible models are rejected before any model credits are spent, with a link to OpenRouter's filtered compatible-model list.

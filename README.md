@@ -70,13 +70,13 @@ From a checkout:
 ./scripts/install.sh --local
 ```
 
-Then follow the guided setup. By default it selects your login shell and safe defaults, so the normal path asks only which provider to use when several are installed, followed by one confirmation:
+Then follow the guided setup. By default it selects your login shell and safe defaults, asks which provider to use, and finishes with one confirmation. OpenRouter appears as the explicit metered option alongside the installed CLI providers:
 
 ```sh
 humansh setup
 ```
 
-Setup names the provider, shell, and startup file it will change, then runs one provider check after confirmation. `--yes` runs it non-interactively. A healthy rerun keeps the saved settings with no questions or provider check. Use `humansh setup --advanced` to change models, privacy, timeout, shortcuts, provider executables, OpenRouter, or configure every compatible shell. See [docs/setup.md](docs/setup.md) for details.
+Setup names the provider, shell, and startup file it will change, then checks the selected provider. CLI providers are checked after confirmation. OpenRouter uses `OPENROUTER_API_KEY` when set; otherwise setup offers to read and store a key securely, asks for a concrete model, and runs its disclosed compatibility check before review. `--yes` runs the CLI-provider path non-interactively. A healthy rerun keeps the saved settings with no questions or provider check. Use `humansh setup --advanced` to change models, privacy, timeout, shortcuts, provider executables, or configure every compatible shell. See [docs/setup.md](docs/setup.md) for details.
 
 The terminal that launched the installer keeps its old shell bindings. Open a new terminal (or run `exec zsh` for Zsh), then try:
 
