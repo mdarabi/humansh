@@ -22,7 +22,8 @@ import (
 // there is a real choice, show the shell file that will change, and ask for one
 // final confirmation. The full preference editor lives behind --advanced.
 func runQuickSetup(ctx context.Context, options setupOptions, rt bootstrap.Runtime, streams IO) int {
-	interactive := readerIsTerminal(streams.In) && !options.yes
+	terminalInput := readerIsTerminal(streams.In)
+	interactive := terminalInput && !options.yes
 	ui := newSetupUI(streams, interactive)
 	ui.ctx = ctx
 	quickSetupHeader(ui)
@@ -38,12 +39,22 @@ func runQuickSetup(ctx context.Context, options setupOptions, rt bootstrap.Runti
 		return protocol.ExitConfig
 	}
 	cfg := rt.Config
-	targetShells, verifyShells, allowShellFallback, err := quickSetupShells(options, cfg, state, hasState)
+	installerRun := os.Getenv("HUMANSH_INSTALLER_RUN") == "1"
+	invokingShell := shell.ID("")
+	if terminalInput && options.shellName == "" && !options.repair && (!hasState || installerRun) {
+		invokingShell = detectInvokingShell()
+	}
+	targetShells, verifyShells, allowShellFallback, err := quickSetupShells(options, cfg, state, hasState, invokingShell, installerRun)
 	if err != nil {
 		fmt.Fprintln(streams.Err, err)
 		return protocol.ExitConfig
 	}
-	if err := prepareQuickSetupShells(ctx, &cfg, targetShells, verifyShells, allowShellFallback, hasState && options.shellName == "", options.repair, rt); err != nil {
+	verifyOnly := shell.ID("")
+	if installerRun {
+		verifyOnly = invokingShell
+	}
+	preservePrimary := hasState && options.shellName == "" && !installerRun
+	if err := prepareQuickSetupShells(ctx, &cfg, targetShells, verifyShells, allowShellFallback, verifyOnly, preservePrimary, options.repair, rt); err != nil {
 		if ctx.Err() != nil {
 			printSetupCancellation(streams.Out, false)
 			return 130
@@ -142,7 +153,11 @@ func runQuickSetup(ctx context.Context, options setupOptions, rt bootstrap.Runti
 		return 0
 	}
 
-	printQuickSetupCelebration(cfg, targetShells, ui)
+	onboardingShell := cfg.Shell.Name
+	if installerRun && (invokingShell == shell.Zsh || invokingShell == shell.Bash) {
+		onboardingShell = invokingShell
+	}
+	printQuickSetupCelebration(cfg, onboardingShell, ui)
 	return 0
 }
 
@@ -195,7 +210,7 @@ func loadQuickInstallState(path string) (config.InstallState, bool, error) {
 	return state, len(state.ShellIDs()) > 0, nil
 }
 
-func quickSetupShells(options setupOptions, cfg config.RuntimeConfig, state config.InstallState, hasState bool) ([]shell.ID, bool, bool, error) {
+func quickSetupShells(options setupOptions, cfg config.RuntimeConfig, state config.InstallState, hasState bool, invokingShell shell.ID, installerRun bool) ([]shell.ID, bool, bool, error) {
 	if options.shellName != "" {
 		id := shell.ID(strings.ToLower(options.shellName))
 		if id != shell.Zsh && id != shell.Bash {
@@ -203,11 +218,17 @@ func quickSetupShells(options setupOptions, cfg config.RuntimeConfig, state conf
 		}
 		return []shell.ID{id}, true, false, nil
 	}
+	if installerRun && (invokingShell == shell.Zsh || invokingShell == shell.Bash) {
+		return normalizeQuickShells(append(state.ShellIDs(), invokingShell)), true, false, nil
+	}
 	if hasState {
 		return normalizeQuickShells(state.ShellIDs()), false, false, nil
 	}
 	if options.repair {
 		return []shell.ID{cfg.Shell.Name}, false, false, nil
+	}
+	if invokingShell == shell.Zsh || invokingShell == shell.Bash {
+		return []shell.ID{invokingShell}, true, false, nil
 	}
 	if login := shell.ID(filepath.Base(os.Getenv("SHELL"))); login == shell.Zsh || login == shell.Bash {
 		return []shell.ID{login}, true, false, nil
@@ -228,7 +249,7 @@ func normalizeQuickShells(ids []shell.ID) []shell.ID {
 	return normalized
 }
 
-func prepareQuickSetupShells(ctx context.Context, cfg *config.RuntimeConfig, targetShells []shell.ID, verify, allowFallback, preservePrimary, repair bool, rt bootstrap.Runtime) error {
+func prepareQuickSetupShells(ctx context.Context, cfg *config.RuntimeConfig, targetShells []shell.ID, verify, allowFallback bool, verifyOnly shell.ID, preservePrimary, repair bool, rt bootstrap.Runtime) error {
 	if len(targetShells) == 0 {
 		return fmt.Errorf("humansh: no supported shell integration is available.\nNothing was changed or executed")
 	}
@@ -258,7 +279,7 @@ func prepareQuickSetupShells(ctx context.Context, cfg *config.RuntimeConfig, tar
 		if !ok {
 			return fmt.Errorf("humansh: %s integration is unavailable in this build.\nNothing was changed or executed", shellDisplayName(id))
 		}
-		if !verify || repair {
+		if !verify || repair || verifyOnly != "" && id != verifyOnly {
 			continue
 		}
 		diagnostic := adapter.Diagnose(ctx)
@@ -507,13 +528,13 @@ func printQuickSetupApplyError(err error, streams IO) {
 	}
 }
 
-func printQuickSetupCelebration(cfg config.RuntimeConfig, targetShells []shell.ID, ui *setupUI) {
+func printQuickSetupCelebration(cfg config.RuntimeConfig, onboardingShell shell.ID, ui *setupUI) {
 	fmt.Fprintln(ui.streams.Out)
 	fmt.Fprintln(ui.streams.Out, ui.paint(ansiBold+ansiGreen, "🎉 Humansh is ready!"))
 	fmt.Fprintln(ui.streams.Out)
 	quickSetupRow(ui, "Settings", ui.paint(ansiBold, "`humansh setup --advanced`"))
 	trigger := config.BindingLabel(cfg.Shell.ForceTranslateBinding)
-	if containsShell(targetShells, shell.Zsh) && cfg.Shell.SmartEnter {
+	if onboardingShell == shell.Zsh && cfg.Shell.SmartEnter {
 		trigger = "Enter"
 	}
 	fmt.Fprintln(ui.streams.Out)

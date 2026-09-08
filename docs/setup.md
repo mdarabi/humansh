@@ -31,14 +31,14 @@ The installer replaces the binary atomically and verifies it against the staged 
 
 ## Choosing shells
 
-Default setup configures the login shell named by `$SHELL`. To choose a shell explicitly:
+Default setup configures the Bash or Zsh session that launched it. If that session cannot be identified, it falls back to the login shell named by `$SHELL`. To choose a shell explicitly:
 
 ```sh
 ./scripts/install.sh --local --shell bash
 humansh setup --shell bash          # or afterwards, against the installed binary
 ```
 
-Setup verifies the selected shell, installs its embedded integration under the XDG data directory, and adds one idempotent managed block to its startup file. Existing installations retain every shell integration already recorded in install state. To discover and configure every compatible Zsh and Bash installation, run:
+Setup verifies the selected shell, installs its embedded integration under the XDG data directory, and adds one idempotent managed block to its startup file. A direct healthy setup rerun retains every shell integration already recorded in install state. Rerunning the installer from the other supported shell adds that invoking shell while retaining the existing integrations. To discover and configure every compatible Zsh and Bash installation, run:
 
 ```sh
 humansh setup --advanced
@@ -58,7 +58,7 @@ Each managed block exports the resolved binding values before sourcing its immut
 
 ## The default flow
 
-On a fresh machine, setup silently checks the login shell and installed CLI providers. If exactly one provider is usable, it selects it automatically. If several are usable, it asks one provider question. The flow separates provider choice, review, and the final next step instead of presenting a block of explanatory prose:
+On a fresh machine, setup silently checks the invoking shell and installed CLI providers. If exactly one provider is usable, it selects it automatically. If several are usable, it asks one provider question. The flow separates provider choice, review, and the final next step instead of presenting a block of explanatory prose:
 
 ```text
 humansh setup
@@ -88,7 +88,7 @@ Review
   Try it: open a new terminal, type `list files`, press Enter to translate, then Enter to run.
 ```
 
-After confirmation, setup runs one minimal provider check, applies the already prepared startup-file plan, and ends with one example showing how to start. A healthy rerun preserves the saved provider, preferences, and installed shell set; it asks no questions and does not spend provider quota on another live check. If an update or repair would change a startup file, setup names the exact file and asks once.
+After confirmation, setup runs one minimal provider check, applies the already prepared startup-file plan, and ends with one example showing how to start. A healthy direct setup rerun preserves the saved provider, preferences, and installed shell set; it asks no questions and does not spend provider quota on another live check. An installer rerun from a different supported shell preserves the provider, preferences, and existing shell integrations while reviewing the new integration. If an update or repair would change a startup file, setup names the exact file and asks once.
 
 `--yes` accepts the concise plan non-interactively. `NO_COLOR=1` disables styling. Provider checks show an in-place loader on a terminal; redirected output gets one stable `Checking…` line instead.
 

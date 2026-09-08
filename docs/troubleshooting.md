@@ -10,7 +10,7 @@ humansh doctor --fix
 exec zsh
 ```
 
-Run `humansh setup` to configure your login shell, or `humansh setup --advanced` to discover and configure every usable supported shell. Bash 4.3+ is required so Humansh can safely capture and restore existing Readline shell-command bindings. The `/bin/bash` shipped by macOS is 3.2, so select Zsh or install a current Bash and ensure it is the `bash` found in `PATH`.
+On a fresh installation, run `humansh setup` from the Bash or Zsh session you want to configure. To switch an existing setup explicitly, run `humansh setup --shell bash` or `humansh setup --shell zsh`; use `humansh setup --advanced` to configure every usable supported shell. Bash 4.3+ is required so Humansh can safely capture and restore existing Readline shell-command bindings. The `/bin/bash` shipped by macOS is 3.2, so select Zsh or install a current Bash and ensure it is the `bash` found in `PATH`.
 
 Setup updates startup files, but it cannot change the already-running parent shell. If a natural-language line such as `list files` produces `zsh: command not found: list` immediately after installation, open a new terminal or run `exec zsh`; do not run the natural-language request as a literal command again until the new shell has loaded the managed block. If a new shell prints that the Humansh binary is missing, rerun the installer before using the integration.
 
