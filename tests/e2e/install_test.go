@@ -316,8 +316,23 @@ func installZshFixture(t *testing.T) *installedFixture {
 	if err != nil {
 		t.Fatalf("install checked-out Humansh: %v\n%s", err, installerOutput)
 	}
-	if text := string(installerOutput); !strings.Contains(text, "Installed humansh to ") || !strings.Contains(text, "setup --shell zsh") {
+	if text := string(installerOutput); !strings.Contains(text, "setup --shell zsh") {
 		t.Fatalf("installer did not complete the normal non-interactive flow:\n%s", text)
+	} else {
+		result := "Installation details\n\n" +
+			"  Binary     ~/.local/bin/humansh\n" +
+			"  License    MIT"
+		completionIndex := strings.Index(text, "Installation details\n")
+		if completionIndex < 0 {
+			t.Fatalf("installer did not print a completion section:\n%s", text)
+		}
+		completion := text[completionIndex:]
+		if !strings.Contains(completion, result) {
+			t.Fatalf("installer did not print the aligned completion result:\n%s", text)
+		}
+		if strings.Contains(completion, home) || strings.Contains(completion, "github.com/agenticlab-ai/humansh/blob/main/LICENSE") {
+			t.Fatalf("installer printed a long home or license path:\n%s", text)
+		}
 	}
 
 	installedBinary := filepath.Join(home, ".local", "bin", "humansh")
@@ -332,7 +347,7 @@ func installZshFixture(t *testing.T) *installedFixture {
 	if err != nil {
 		t.Fatalf("complete installed Zsh setup: %v\n%s", err, setupOutput)
 	}
-	if !strings.Contains(string(setupOutput), "humansh setup complete") {
+	if !strings.Contains(string(setupOutput), "🎉 Humansh is ready!") {
 		t.Fatalf("setup did not report completion:\n%s", setupOutput)
 	}
 

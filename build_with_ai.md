@@ -495,8 +495,8 @@ The Go shell module does not execute a generated command. It validates and retur
 `internal/config` owns the complete configuration lifecycle:
 
 - Typed schemas and validation.
-- Setup-time defaults and the guided setup wizard.
-- Provider selection and the set of automatically discovered shell integrations.
+- Setup-time defaults, the concise setup path, and the advanced setup wizard.
+- Provider selection, fresh-install login-shell selection, and the set of installed shell integrations.
 - Atomic persistence and versioned migration.
 - Install-state recording for doctor/repair/uninstall.
 - Secret-store abstraction and secure credential references.
@@ -528,7 +528,7 @@ Only the configuration module reads or writes `config.toml`, `classifier.toml`, 
 Installation/setup must determine and persist at least:
 
 - Config schema version.
-- Every usable installed shell adapter (`zsh`, `bash`), without requiring a user choice.
+- The fresh install's usable login-shell adapter by default; every usable installed adapter when advanced discovery is requested.
 - Each installed shell's protocol version and integration asset version/hash.
 - Whether smart Enter is enabled and the configured clear-line/force-translate/force-literal bindings.
 - Selected LLM provider: `codex`, `claude`, `cursor`, or `openrouter`.
@@ -576,23 +576,26 @@ Implement the following user-facing commands.
 
 ### `humansh setup`
 
-Interactive, idempotent one-time setup. It discovers Zsh and Bash independently, installs every usable embedded integration, updates each applicable startup file, discovers providers, selects/configures one, and runs diagnostics. Shell type is not a normal user decision.
+Interactive, idempotent setup with a concise default path. On a fresh install, select the usable login shell from `$SHELL`, discover installed CLI providers without inference, ask for a provider only when multiple candidates exist, summarize the startup-file action, and ask once before applying. Probe the selected provider only after confirmation. A healthy rerun preserves the saved provider, preferences, and installed shell set with no questions and no provider probe. A repair or migration names each startup file it will change and asks at most once.
+
+`humansh setup --advanced` retains the full preference editor, exact managed-block review, OpenRouter configuration, executable pinning, and discovery of every compatible Zsh/Bash installation.
 
 Required flags:
 
 ```text
 --yes                 Use safe defaults without prompts where possible.
 --provider <name>     codex, claude, cursor, or openrouter.
---shell <name>        Advanced restriction: install only zsh or only bash.
+--shell <name>        Install only zsh or only bash.
 --repair              Reinstall/repair shell integration without resetting provider config.
 --no-shell-change     Do not edit startup files; print every applicable exact block.
+--advanced            Customize all preferences and discover every compatible shell.
 ```
 
 ### `humansh onboarding [zsh|bash]`
 
-Show a concise shell-specific practice flow using the user's configured bindings. For Zsh with Smart Enter enabled, ask the user to type `list all the files in this directory`, press Enter once to translate it for review, and press Enter again only if the generated command looks correct. If Smart Enter is disabled, show the configured force-translation shortcut instead. For Bash, explicitly tell the user to use the configured force-translation shortcut before Enter because Bash preserves normal Enter behavior. Explain that translation only replaces the editable line and does not execute it. Show the configured clear-line shortcut as the cancel action.
+Show a concise shell-specific practice flow using the user's configured bindings. For Zsh with Smart Enter enabled, ask the user to type `list files`, press Enter once to translate it for review, and press Enter again only if the generated command looks correct. If Smart Enter is disabled, show the configured force-translation shortcut instead. For Bash, explicitly tell the user to use the configured force-translation shortcut before Enter because Bash preserves normal Enter behavior. Explain that translation only replaces the editable line and does not execute it. Show the configured clear-line shortcut as the cancel action.
 
-With no shell argument, use the installed shell-integration state. Show Zsh first when configured. If Bash is also configured and the command is interactive, ask whether the user wants the Bash walkthrough too; if it is non-interactive, point to `humansh onboarding bash`. Reject a requested shell that is not configured and show the exact setup command. The walkthrough never starts or replaces a shell process.
+With no shell argument, use the installed shell-integration state and show one primary guide, preferring Zsh when configured. If Bash is also configured, point to `humansh onboarding bash` without asking another question. Reject a requested shell that is not configured and show the exact setup command. The walkthrough never starts or replaces a shell process.
 
 ### `humansh smart`
 
@@ -1676,9 +1679,9 @@ Default setup behavior:
 3. Discover installed Cursor CLI, preferring `cursor-agent` and falling back to `agent`, without running optional auth/version/help commands.
 4. Detect an existing OpenRouter key.
 5. In every interactive setup run, show one concise status line for each provider and ask which provider to use. The saved provider is the default answer, never an automatic interactive selection.
-6. Keep diagnostics for unselected providers collapsed. After selection, disclose and run one constant minimal inference prompt for that provider only.
-7. Do not offer or launch provider login commands. On failure, show the bounded/redacted provider error and supported Humansh check commands.
-8. Do not complete setup without one live, responding provider. Exit nonzero before writing credentials, configuration, or shell files so an invoking installer rolls back its binary replacement.
+6. Keep diagnostics for unselected providers collapsed. After confirmation, run one constant minimal inference prompt for the selected provider only.
+7. Never launch provider login commands or guess an authentication flow. Treat failed probe text as opaque: print it verbatim after credential/control filtering and length bounding, but do not classify its wording or derive provider-specific recovery commands from it.
+8. Do not complete setup without one live, responding provider. The setup command exits with the generic provider-unavailable status before writing credentials, configuration, or shell files. An invoking installer reports a clean stop, restores the previous binary (or removes a fresh staged binary), and exits successfully so Make does not append an internal rule error.
 
 Configuration must name one active provider:
 
@@ -2124,16 +2127,16 @@ This must work immediately for development:
 ./scripts/install.sh --local
 ```
 
-No shell flag is needed: setup discovers and configures every usable supported shell. `./scripts/install.sh --local --shell bash` or `--shell zsh` is an advanced restriction for intentionally installing only one integration; the installer passes that restriction to setup.
+No shell flag is needed: quick setup selects the usable login shell from `$SHELL`. `./scripts/install.sh --local --shell bash` or `--shell zsh` intentionally selects one integration; the installer passes that choice to setup. Run `humansh setup --advanced` to discover and configure every compatible shell.
 
 It should:
 
 1. Build the Go binary if needed.
 2. Install to `~/.local/bin/humansh` without `sudo`.
 3. Run `humansh setup` interactively when stdin is a TTY.
-4. After setup succeeds, verify that the installed executable is still the regular, executable binary staged by the installer. If it disappeared while setup or a provider subprocess was running, atomically restore it from the staged binary before committing; fail closed on any other unexpected replacement.
-5. After setup commits and the binary installation is committed, run `humansh onboarding` on the same interactive terminal. Onboarding failure must not roll back a successful installation; print the command for retrying it.
-6. Tell the user to use a new terminal so each configured shell loads its own integration. Do not execute a shell automatically because an installer child cannot replace its parent process and cannot reliably identify a nested current shell from `$SHELL`.
+4. After setup returns, verify that the installed executable is still the regular, executable binary staged by the installer. If it disappeared while setup or a provider subprocess was running, atomically restore it from the staged binary before committing; fail closed on any other unexpected replacement.
+5. If the selected provider fails its readiness check, print a clean stopped-installation message, restore the previous binary (or remove a fresh staged binary), and return success to the invoking installer so `make install` does not print an internal rule error. Other setup errors remain nonzero and roll back the binary. After setup commits, report the installed binary path normally. Do not launch a second onboarding interaction; quick setup already prints one example.
+6. Tell the user to use a new terminal so each configured shell loads its own integration. Do not execute a shell automatically because an installer child cannot replace its parent process.
 
 Also provide:
 
@@ -2152,9 +2155,9 @@ The root installer should:
 4. Install without root into `~/.local/bin` by default.
 5. Add `~/.local/bin` to PATH only through each installed shell's small idempotent managed startup block when needed.
 6. Invoke `humansh setup`.
-7. After a successful interactive setup and committed binary installation, invoke `humansh onboarding` without starting a nested shell.
+7. After a successful interactive setup and committed binary installation, do not invoke `humansh onboarding`; leave the explicit command available for later help.
 8. Never silently install Codex, Claude Code, Cursor CLI, Homebrew, Go, or other third-party software.
-9. On any failure, print a direct fix rather than leaving a partial setup.
+9. On a provider-readiness failure, print the provider's safe bounded message plus one generic instruction to fix it and rerun the installer. Stop cleanly and restore the previous binary or remove the fresh staged binary. Other setup failures remain errors and roll back the replacement.
 
 The checksum establishes download integrity only when it comes from the same release host as the binary; it does not by itself authenticate a compromised release host. Prefer a signed checksum, release signature, or provenance attestation verified from an independently established trust root. If releases are not signed, say so plainly in `docs/security.md` and do not describe same-host SHA-256 verification as authenticity.
 
@@ -2183,81 +2186,69 @@ Requirements:
 - Preserve file permissions and unrelated content.
 - Add exactly one block.
 - Re-running setup updates the block rather than duplicating it.
-- Before final setup confirmation, show the exact additions/removals for every managed startup block affected by setup and identify resolved symlink targets. Do not echo unrelated startup-file content in the review.
+- Before quick-setup confirmation, name every startup file that will be added, refreshed, or removed. Advanced setup shows the exact managed-block additions/removals and identifies resolved symlink targets. Neither path echoes unrelated startup-file content.
 - Apply only the reviewed startup-file plan. If the file, symlink target, mode, or rendered result changes after review, stop and require a fresh review.
 - Render the four `HUMANSH_*` values from the validated typed `[shell]` configuration. Accept only canonical supported binding notation with no quotes, newlines, NULs, or shell metacharacters, and serialize it with fixed safe quoting; never concatenate arbitrary TOML text into a startup file.
 - The embedded asset provides the same defaults when these variables are absent. Do not rewrite the asset to apply preferences: `shell_asset_sha256` continues to verify the exact embedded file, while `managed_block_version` and `doctor` verify the rendered exports.
 - Detect and repair a partially corrupted managed block.
-- If the startup file or directory required for atomic replacement is not writable, do not fail vaguely. Offer `--no-shell-change` in interactive setup; otherwise print that exact recovery command and explain that it prints the block to add manually.
+- If the startup file or directory required for atomic replacement is not writable, do not fail vaguely. Quick setup prints the exact `--no-shell-change` recovery command; advanced interactive setup may offer that choice in place. Explain that the option prints the block to add manually.
 - Never source or execute arbitrary content while editing a startup file.
 - If `zsh-syntax-highlighting` is sourced, insert or move the humansh block immediately before that source line so the highlighting plugin remains last and can wrap humansh's widgets. Otherwise place the block near the end and rely on `doctor` to detect later keybinding replacement.
 
-### 16.4 Setup wizard
+### 16.4 Setup flows
 
-Example experience:
+The default experience is intentionally short:
 
 ```text
 humansh setup
 
-humansh setup
-Natural-language commands for Zsh and Bash, with review before execution.
-Configuration and shell files are not changed until the final confirmation.
+Choose your AI provider
 
-1/6  Shell compatibility
-  i Humansh automatically configures every compatible Zsh or Bash installation it finds.
-  ✓ Zsh 5.9          compatible
-  – Bash 3.2.57      minimum required: Bash 4.3
+  1  Codex       default
+  2  Claude Code
+  3  Cursor CLI
 
-2/6  AI provider
-  ? Codex            installed — live check pending
-  ? Claude Code      installed — live check pending
-  ? Cursor CLI       installed — live check pending
-  – OpenRouter       not configured — metered
+  AI provider [1]:
 
-3/6  Translation preferences
-  Directory context      Folder name only (default)
-  Provider timeout       20 seconds (default)
+Review
+  Shell      Zsh
+  Provider   Codex
+  Startup    Update ~/.zshrc
+  Safety     Commands wait for your review
 
-4/6  Shell controls
-  Zsh Enter              Detects commands and requests (default)
-  Clear input            Esc (default)
-  Translate request      Ctrl-G (default)
-  Run as typed           Ctrl-X then Enter (default)
-    Also confirms a translated command marked high risk.
-  ! Esc and Ctrl-G may already be used by your shell or terminal. Choose different shortcuts below if needed.
-  i To change a shortcut, press the keys, then Enter. If it includes Enter, type its name instead (for example, Ctrl-X Enter).
+  Continue? [Y/n]:
 
-5/6  Review
-  ...
-  Apply this setup? [Y/n]
+  … Checking Codex…
+  ✓ Codex ready
 
-6/6  Complete
-  ✓ humansh setup complete.
-  Next: open a new terminal. Humansh will load automatically in each configured shell.
-  Zsh: Enter detects natural language; Ctrl-G forces translation.
-  Bash: type natural language and press Ctrl-G; Enter runs normal Bash commands.
+🎉 Humansh is ready!
+
+  Settings   `humansh setup --advanced`
+
+  Try it: open a new terminal, type `list files`, press Enter to translate, then Enter to run.
 ```
 
-Keep prompts concise and visually grouped. The first phase must be called **Shell compatibility**, not a generic environment check. List every installed supported shell with a concise parsed version. A compatible shell says `compatible`; an installed shell below its version floor shows only its minimum requirement rather than a long diagnostic. Do not list an absent shell as though it were an installation failure. Do not show shell-activation explanations or startup-file targets in this phase; reserve those details and managed-block patches for the final review. During shell discovery, the selected provider's live check, and OpenRouter network checks, render an animated in-place loader when stdout is a usable terminal, then clear it before printing results or prompts. When output is redirected or the terminal is `dumb`, emit one stable `Checking…` line with no carriage returns or ANSI escapes. Use color and emphasis only on an interactive terminal, respect `NO_COLOR`, and never emit ANSI styling for redirected or non-interactive output. Explain that CLI authentication is provider-managed and OpenRouter is metered. Show human-readable shortcuts in prompts and summaries while continuing to store canonical shell-independent binding notation.
+Quick setup must:
 
-After the user selects an installed CLI, disclose the quota-consuming minimal probe:
+- Select the fresh install's login shell from `$SHELL`; an explicit `--shell` overrides it. Preserve all recorded integrations on a normal rerun.
+- Discover Codex, Claude Code, and Cursor locally without inference. Select a sole ready CLI automatically; ask one compact provider question only when multiple candidates exist.
+- Separate provider choice, review, and completion with whitespace and short headings. Show only the effective shell/provider, each startup-file action, and the fixed review-before-execution safety statement as aligned review rows. Do not show control-mode jargon, quota-check explanations, successful shell versions, default preferences, full managed-block patches, or prose paragraphs.
+- Ask exactly one final confirmation before changing a startup file. Together with an optional provider choice, a normal fresh setup has at most two prompts.
+- Run the selected provider's constant minimal inference probe after confirmation and before writing anything. Never invoke login/logout/auth-status commands.
+- On success, print one short celebratory card with the advanced-settings command and one plain-language, shell-specific example line showing how to translate and run `list files`. The installer must not follow it with automatic onboarding.
+- On a healthy rerun, preserve configuration and installed shells, refresh Humansh-owned assets/state idempotently, and use zero prompts and zero provider probes.
+- On repair or migration, name the startup files that will change and require at most one confirmation. A probe is unnecessary when preserving an existing provider.
+- Return nonzero without changes when shell discovery, provider selection/probing, preview, or cancellation fails. Every failed quick provider probe uses the generic provider-unavailable status; its wording must not select an exit code.
 
-```text
-i The live check sends one constant minimal prompt and may consume a small amount of provider quota.
-… Checking Codex with its normal inference command…
-```
+During provider checks, render an animated in-place loader when stdout is a usable terminal, then clear it before printing results. When output is redirected or the terminal is `dumb`, emit one stable `Checking…` line with no carriage returns or ANSI escapes. Use color and emphasis only on an interactive terminal, respect `NO_COLOR`, and never emit ANSI styling for redirected output. Do not print detailed diagnostics for unselected providers.
 
-Setup must never invoke login/logout/auth-status commands. A centrally managed CLI may intentionally reject those commands while normal inference succeeds. If the inference probe fails during interactive setup, show the provider's safe bounded error and let the user leave setup open while fixing the issue, then retry the same selected provider in place. Declining that retry returns to the provider menu unless an explicit provider was requested. Non-interactive setup, cancellation, or finishing without a ready provider must return nonzero before any changes.
+`humansh setup --advanced` retains the six-section setup editor. Its first phase is **Shell compatibility** and lists every installed supported shell with a concise version, skipping absent shells and explaining an installed shell below its version floor. It exposes provider/executable/model selection, context privacy, timeout, Smart Enter, and shortcut settings; accepts friendly or directly typed control-key sequences; shows exact managed-block patches; and requires final confirmation. Shortcut capture must use raw terminal mode and reject equal or prefix-overlapping bindings.
 
-Do not print detailed diagnostics for unselected providers. The provider question itself is required even when exactly one provider is currently usable.
+Advanced setup also owns multi-step OpenRouter configuration. It links to the key/model pages, collects the key without echo, validates the key once and each candidate's explicit `structured_outputs` capability without model credits, rejects incompatible models with a filtered-model link, and immediately repeats the model-ID prompt. It accepts `back` to return to provider selection, discloses and runs one minimal metered strict-schema check, stages credentials/settings until final confirmation, and saves nothing if no candidate passes or setup is cancelled.
 
-Setup must also:
+If an advanced CLI-provider probe fails, show its safe bounded error and let the user retry after fixing it. Declining returns to the provider menu unless an explicit provider was requested. When configuring Codex with `--ignore-user-config`, advanced setup offers to copy the user's selected Codex model; otherwise it explains that Codex's built-in default is used.
 
-- Warn in plain language when a shortcut may replace an existing shell or terminal action, and offer a configurable alternative during setup. Keep implementation-specific keymap and terminal timing details in troubleshooting documentation instead of the setup wizard.
-- Accept friendly shortcut input such as `Ctrl-X Ctrl-T` or direct physical control-key input, and reject equal or prefix-overlapping shortcuts that would make one action unreachable. Shortcut prompts must capture control keys in raw terminal mode so line-editor actions such as `Ctrl-R` are not mistaken for an empty response; Enter ends the capture, so sequences that themselves end in Enter must be entered by their friendly name.
-- Show a final effective-configuration review and require confirmation before writing configuration or shell files. Ctrl-C at any prompt or in-progress shell, provider, key, or model check must cancel the active work, restore normal terminal input, exit with status 130, and leave credentials, configuration, and shell files unchanged so the installer can roll back a newly replaced binary.
-- When configuring Codex with `--ignore-user-config`, offer to copy the user's selected Codex model into `providers.codex.model`; otherwise explain that Codex's built-in default is used.
-- When the user chooses OpenRouter in interactive setup, configure it inside that setup flow rather than sending the user to another command: link to the key/model pages, collect the key without echo, validate the key once and validate each candidate's explicit `structured_outputs` capability without model credits, reject incompatible models with a filtered-model link, and immediately repeat the model-ID prompt so the user can paste another ID directly. Never put a yes/no prompt between failed and replacement model IDs; accept `back` to return to provider selection. Disclose and automatically run one minimal metered strict-schema check, stage the credential and concrete successful model until final confirmation, and leave the provider unconfigured if no candidate passes or setup is cancelled. Do not ask for separate approval for a check that is required to finish setup.
+Ctrl-C at any prompt or in-progress shell, provider, key, or model check must restore normal terminal input, exit with status 130, and leave credentials, configuration, and shell files unchanged.
 
 ### 16.5 Uninstall
 
@@ -2680,7 +2671,7 @@ Use a fake `claude` executable.
 Assert:
 
 - Diagnose executes no subprocess. Probe executes exactly `claude -p <constant-prompt>` and accepts a managed distribution even when its auth subcommands would be unavailable.
-- Probe failures preserve bounded, redacted provider stdout/stderr and never recommend an assumed vendor login command.
+- Probe failures preserve bounded, credential-redacted provider stdout/stderr exactly as provider-owned text. They do not classify that text or turn any part of it into a Humansh recommendation.
 - `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, custom base URL, and cloud-provider override variables are absent from the translation subprocess environment.
 - `--safe-mode` is present.
 - `--bare` is absent.
@@ -2732,6 +2723,9 @@ Run with a temporary `HOME` and XDG paths.
 Cover:
 
 - Fresh setup.
+- A fresh quick setup under a pseudo-terminal has at most one provider-choice prompt plus one confirmation, omits advanced sections/patches/onboarding, and configures only the login shell.
+- The quick review omits control-mode jargon and provider-check/quota explanations; successful setup ends with one shell-specific `list files` example.
+- A healthy interactive rerun has zero prompts, preserves the config/startup file, and does not call the provider again.
 - Explicit Bash setup, Bash 3.x rejection, and migration between Zsh and Bash without stale managed blocks or assets.
 - Existing empty `.zshrc`.
 - Existing populated `.zshrc`.
@@ -2752,7 +2746,7 @@ Cover:
 - Managed-block exports for `smart_enter`, clear-line, force-translate, and force-literal exactly reflect typed config; changing them rewrites only the block, leaves the embedded asset and `shell_asset_sha256` unchanged, and is detected by `doctor` if the block drifts.
 - Unsafe binding text is rejected before startup-file rendering; no config value can inject shell syntax.
 - Home-directory working context is serialized as `~`, never the username.
-- A piped interactive installer uses `/dev/tty`; if setup or a provider subprocess removes the installed binary, the installer restores and verifies it before reporting success or launching onboarding.
+- A piped interactive installer uses `/dev/tty`; if setup or a provider subprocess removes the installed binary, the installer restores and verifies it before reporting success. It does not launch onboarding.
 
 ### 20.9 Zsh end-to-end tests
 
@@ -3132,8 +3126,9 @@ Expected:
 The minimal inference command exits nonzero with a safe provider explanation. Expected:
 
 - The original input remains editable and setup makes no changes.
-- The bounded, redacted provider explanation is visible; `exit status 1` is not the only message.
-- Recovery points to `humansh provider test NAME` or `humansh doctor --provider NAME`, never to an assumed vendor login subcommand.
+- The bounded, credential-redacted provider explanation is visible without a Humansh paraphrase; `exit status 1` is not the only message.
+- The probe text is not classified and no provider-specific recovery command is derived from it.
+- Direct setup returns the generic provider-unavailable status. The installer restores/removes its staged binary and exits cleanly after asking the user to fix the provider issue and rerun it; `make install` must not print `Error 22` or another Make rule failure.
 
 ### Scenario G2: minimal probe succeeds but production options are incompatible
 
@@ -3299,7 +3294,7 @@ Complete all phases in the same implementation effort; do not stop after a phase
 
 ### Phase 5: configuration-driven setup and diagnostics
 
-- `humansh setup` with automatic provider/shell discovery and no ordinary shell-selection prompt.
+- Concise `humansh setup` with login-shell/provider discovery, at most two fresh-install prompts, and a zero-prompt healthy rerun; full discovery/customization under `--advanced`.
 - Persist the installed shell/protocol set, keybindings, provider, provider model/auth mode, timeout/context/fallback settings, and versioned multi-shell install state.
 - Keychain/credential fallback.
 - `.zshrc`/`.bashrc` idempotent managed blocks and transactional multi-shell additions/removals.
@@ -3329,7 +3324,7 @@ The implementation is done only when:
 - Setup persists a complete typed configuration and install state; runtime modules receive immutable injected configuration rather than reading files globally.
 - Architecture/import-boundary tests run under `make test-architecture` and `make verify`.
 - A fresh user can install locally with one command from a checkout.
-- A fresh setup configures every usable supported shell without asking the user to identify the current shell; an unavailable secondary shell is reported and skipped.
+- A fresh quick setup configures the usable login shell without asking the user to identify it; advanced setup discovers every usable supported shell and reports/skips an unavailable secondary shell.
 - Setup detects/configures at least one of Codex, Claude Code, Cursor CLI, or OpenRouter with minimal effort.
 - Clear Zsh commands run without an LLM call; Bash ordinary Enter never calls the LLM.
 - Natural language becomes a reviewed command in the existing Zsh or Bash buffer.

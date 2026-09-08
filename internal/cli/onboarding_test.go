@@ -34,10 +34,10 @@ func TestZshOnboardingTeachesTwoStepReviewWithConfiguredBindings(t *testing.T) {
 		"Getting started with Humansh",
 		"Zsh quick start",
 		onboardingExample,
-		"Press Enter once to translate it",
-		"Nothing has run yet",
-		"press Enter again to execute it",
-		"press Ctrl-U to clear the line",
+		"Press Enter to translate it",
+		"press Enter again to run it",
+		"press Ctrl-U to clear",
+		"Nothing runs before review",
 		"humansh onboarding [zsh|bash]",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -59,39 +59,41 @@ func TestZshOnboardingUsesForceTranslationWhenSmartEnterIsOff(t *testing.T) {
 
 	printOnboardingFlow([]shell.ID{shell.Zsh}, shell.Zsh, cfg, ui)
 
-	if !strings.Contains(out.String(), "Press Ctrl-X then Ctrl-T to translate it. Smart Enter is off") || strings.Contains(out.String(), "Press Enter once to translate it") {
+	if !strings.Contains(out.String(), "Press Ctrl-X then Ctrl-T to translate it") || strings.Contains(out.String(), "Press Enter to translate it") {
 		t.Fatalf("Zsh onboarding ignored configured Smart Enter mode:\n%s", out.String())
 	}
 }
 
-func TestOnboardingOffersOptionalBashWalkthrough(t *testing.T) {
+func TestOnboardingMentionsBashWithoutAddingAnotherPrompt(t *testing.T) {
 	t.Parallel()
 	cfg := config.Default()
 	cfg.Shell.ForceTranslateBinding = "^R"
-	for _, test := range []struct {
-		answer   string
-		wantBash bool
-	}{
-		{answer: "n\n", wantBash: false},
-		{answer: "y\n", wantBash: true},
-	} {
-		var out bytes.Buffer
-		ui := newSetupUI(IO{In: strings.NewReader(test.answer), Out: &out}, true)
-		printOnboardingFlow([]shell.ID{shell.Zsh, shell.Bash}, "", cfg, ui)
+	var out bytes.Buffer
+	ui := newSetupUI(IO{In: strings.NewReader(""), Out: &out}, true)
+	printOnboardingFlow([]shell.ID{shell.Zsh, shell.Bash}, "", cfg, ui)
 
-		if !strings.Contains(out.String(), "Show the Bash walkthrough too? [y/N]") {
-			t.Fatalf("Bash walkthrough was not offered:\n%s", out.String())
+	if !strings.Contains(out.String(), "Bash is configured too. Run `humansh onboarding bash` for its guide.") {
+		t.Fatalf("Bash guide command was not shown:\n%s", out.String())
+	}
+	for _, unwanted := range []string{"Show the Bash walkthrough too?", "Bash quick start"} {
+		if strings.Contains(out.String(), unwanted) {
+			t.Fatalf("onboarding included %q:\n%s", unwanted, out.String())
 		}
-		hasBash := strings.Contains(out.String(), "Bash quick start")
-		if hasBash != test.wantBash {
-			t.Fatalf("answer=%q Bash guide=%t want %t:\n%s", test.answer, hasBash, test.wantBash, out.String())
-		}
-		if test.wantBash {
-			for _, want := range []string{"Press Ctrl-R to translate it", "do not press Enter yet", "press Enter to execute it"} {
-				if !strings.Contains(out.String(), want) {
-					t.Errorf("Bash onboarding missing %q:\n%s", want, out.String())
-				}
-			}
+	}
+}
+
+func TestRequestedBashOnboardingUsesTheTranslateShortcut(t *testing.T) {
+	t.Parallel()
+	cfg := config.Default()
+	cfg.Shell.ForceTranslateBinding = "^R"
+	var out bytes.Buffer
+	ui := newSetupUI(IO{In: strings.NewReader(""), Out: &out}, false)
+
+	printOnboardingFlow([]shell.ID{shell.Zsh, shell.Bash}, shell.Bash, cfg, ui)
+
+	for _, want := range []string{"Bash quick start", "Press Ctrl-R to translate it", "press Enter to run it", "Nothing runs before review"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("Bash onboarding missing %q:\n%s", want, out.String())
 		}
 	}
 }

@@ -78,11 +78,20 @@ esac
 			t.Errorf("release installer did not request %q:\n%s", want, requests)
 		}
 	}
-	if !strings.Contains(string(output), "Installed humansh to "+installed) {
-		t.Fatalf("release install did not report completion:\n%s", output)
+	result := "Installation details\n\n" +
+		"  Binary     ~/.local/bin/humansh\n" +
+		"  License    MIT"
+	text := string(output)
+	completionIndex := strings.Index(text, "Installation details\n")
+	if completionIndex < 0 {
+		t.Fatalf("release install did not print a completion section:\n%s", output)
 	}
-	if !strings.Contains(string(output), "MIT-licensed") || !strings.Contains(string(output), "blob/main/LICENSE") {
-		t.Fatalf("release install did not print the license and liability notice:\n%s", output)
+	completion := text[completionIndex:]
+	if !strings.Contains(completion, result) {
+		t.Fatalf("release install did not print the aligned completion result:\n%s", output)
+	}
+	if strings.Contains(completion, installed) || strings.Contains(completion, "blob/main/LICENSE") || strings.Contains(completion, "provided \"as is\"") {
+		t.Fatalf("release install printed an old lengthy completion value:\n%s", output)
 	}
 }
 
@@ -155,7 +164,7 @@ func TestLocalInstallSetupAndUninstall(t *testing.T) {
 		t.Fatalf("installed binary: info=%v err=%v", info, err)
 	}
 
-	setup := exec.Command(binary, "setup", "--yes")
+	setup := exec.Command(binary, "setup", "--advanced", "--yes")
 	setup.Env = env
 	setup.Stdin = strings.NewReader("")
 	output.Reset()
@@ -231,7 +240,7 @@ func TestLocalInstallSetupAndUninstall(t *testing.T) {
 	}
 }
 
-func TestLocalInstallerRestoresPreviousBinaryWhenSetupFails(t *testing.T) {
+func TestLocalInstallerStopsCleanlyAndRestoresPreviousBinaryOnProviderFailure(t *testing.T) {
 	repo := repositoryRoot(t)
 	home := t.TempDir()
 	installDir := filepath.Join(home, ".local", "bin")
@@ -272,7 +281,7 @@ zpty -b I "$HUMANSH_INSTALL_WRAPPER"
 seen=''
 for attempt in {1..500}; do
   while zpty -r -t I chunk; do seen+=$chunk; done
-  [[ $seen == *INSTALL_STATUS:21* ]] && { print -r -- "$seen"; zpty -d I; exit 0; }
+  [[ $seen == *INSTALL_STATUS:0* ]] && { print -r -- "$seen"; zpty -d I; exit 0; }
   sleep 0.02
 done
 print -ru2 -- "installer did not finish: ${(V)seen}"
@@ -281,12 +290,20 @@ exit 91`
 	command := exec.Command("zsh", "-f", "-c", ptyScript)
 	command.Dir = repo
 	command.Env = append(env, "HUMANSH_INSTALL_WRAPPER="+wrapper)
-	rollbackOutput, err := command.CombinedOutput()
+	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("failed installer PTY: %v\n%s", err, rollbackOutput)
+		t.Fatalf("failed installer PTY: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(rollbackOutput), "setup did not complete; rolling back the binary installation") {
-		t.Fatalf("installer did not explain rollback:\n%s", rollbackOutput)
+	text := string(output)
+	for _, want := range []string{"simulated-provider-proof-failure", "Installation stopped", "Fix the provider issue above, then run the installer again.", "INSTALL_STATUS:0"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("stopped installer output missing %q:\n%s", want, text)
+		}
+	}
+	for _, unwanted := range []string{"Installation details", "Incomplete", "INSTALL_STATUS:21", "rolling back"} {
+		if strings.Contains(text, unwanted) {
+			t.Errorf("stopped installer output included %q:\n%s", unwanted, text)
+		}
 	}
 	data, err := os.ReadFile(installed)
 	if err != nil || string(data) != previous {
@@ -298,7 +315,7 @@ exit 91`
 	}
 }
 
-func TestPipedInteractiveInstallerRestoresBinaryRemovedDuringSetupBeforeOnboarding(t *testing.T) {
+func TestPipedInteractiveInstallerRestoresBinaryRemovedDuringSetupBeforeCompletion(t *testing.T) {
 	repo := repositoryRoot(t)
 	home := t.TempDir()
 	fixtures := filepath.Join(home, "fixtures")
@@ -309,7 +326,6 @@ func TestPipedInteractiveInstallerRestoresBinaryRemovedDuringSetupBeforeOnboardi
 	program := `#!/bin/sh
 case ${1-} in
   setup) echo SETUP_COMPLETE; rm -f "$0" ;;
-  onboarding) echo ONBOARDING_STARTED ;;
   *) exit 2 ;;
 esac
 `
@@ -353,13 +369,12 @@ exit 91`
 	text := string(output)
 	setupIndex := strings.Index(text, "SETUP_COMPLETE")
 	restoredIndex := strings.Index(text, "installed binary disappeared during setup and was restored")
-	installedIndex := strings.Index(text, "Installed humansh to")
-	onboardingIndex := strings.Index(text, "ONBOARDING_STARTED")
-	if setupIndex < 0 || restoredIndex <= setupIndex || installedIndex <= restoredIndex || onboardingIndex <= installedIndex {
-		t.Fatalf("installer did not restore the binary and run onboarding after setup:\n%s", text)
+	installedIndex := strings.Index(text, "Installation details")
+	if setupIndex < 0 || restoredIndex <= setupIndex || installedIndex <= restoredIndex {
+		t.Fatalf("installer did not restore the binary before completing setup:\n%s", text)
 	}
-	if strings.Contains(text, "No such file or directory") || strings.Contains(text, "onboarding could not be shown") {
-		t.Fatalf("installer reproduced the missing-binary onboarding failure:\n%s", text)
+	if strings.Contains(text, "ONBOARDING_STARTED") || strings.Contains(text, "No such file or directory") || strings.Contains(text, "onboarding could not be shown") {
+		t.Fatalf("installer ran the removed onboarding step or reproduced the missing-binary failure:\n%s", text)
 	}
 	installed := filepath.Join(home, ".local", "bin", "humansh")
 	if info, err := os.Stat(installed); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {

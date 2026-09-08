@@ -10,11 +10,11 @@ humansh doctor --fix
 exec zsh
 ```
 
-Run `humansh setup` without naming a shell. It configures every usable supported shell automatically. Bash 4.3+ is required so Humansh can safely capture and restore existing Readline shell-command bindings. The `/bin/bash` shipped by macOS is 3.2, so automatic setup skips it and continues with Zsh. Install a current Bash, ensure it is the `bash` found in `PATH`, and rerun `humansh setup` to add Bash support.
+Run `humansh setup` to configure your login shell, or `humansh setup --advanced` to discover and configure every usable supported shell. Bash 4.3+ is required so Humansh can safely capture and restore existing Readline shell-command bindings. The `/bin/bash` shipped by macOS is 3.2, so select Zsh or install a current Bash and ensure it is the `bash` found in `PATH`.
 
 Setup updates startup files, but it cannot change the already-running parent shell. If a natural-language line such as `list files` produces `zsh: command not found: list` immediately after installation, open a new terminal or run `exec zsh`; do not run the natural-language request as a literal command again until the new shell has loaded the managed block. If a new shell prints that the Humansh binary is missing, rerun the installer before using the integration.
 
-Humansh cannot always modify `.zshrc` or `.bashrc`. Setup runs as the current user without `sudo`, requires owner-writable regular files, and atomically replaces them through writable parent directories. For a symlink, those checks apply to the resolved regular-file target. Interactive setup detects common access failures before confirmation and offers to continue without editing shell files. `humansh setup --no-shell-change` prints the exact block for every detected integration; it cannot be combined with an integration restriction that would leave an old managed block active.
+Humansh cannot always modify `.zshrc` or `.bashrc`. Setup runs as the current user without `sudo`, requires owner-writable regular files, and atomically replaces them through writable parent directories. For a symlink, those checks apply to the resolved regular-file target. If the quick flow detects an access failure, it makes no changes and points to `humansh setup --no-shell-change`, which prints the exact block to add manually. It cannot be combined with an integration restriction that would leave an old managed block active.
 
 Humansh is installed before `zsh-syntax-highlighting` so that plugin can wrap the widget. If the binary is moved or deleted, the widget fails open to the previous Enter binding and prints a one-time warning.
 
@@ -46,7 +46,7 @@ Humansh uses `codex exec` and lets the selected Codex distribution manage authen
 
 ## Claude Code
 
-Shell aliases can hide multiple installations. Automatic selection uses the first executable named `claude` in `PATH`, then falls back to the native installer's `~/.local/bin/claude` path so a new/self-updated CLI is still found before the shell refreshes PATH. `humansh setup` lists distinct PATH installations and lets you pin the one whose provider-managed inference works. The selected path is verified before the final setup confirmation. You can also change it directly:
+Shell aliases can hide multiple installations. Automatic selection uses the first executable named `claude` in `PATH`, then falls back to the native installer's `~/.local/bin/claude` path so a new/self-updated CLI is still found before the shell refreshes PATH. `humansh setup --advanced` lists distinct PATH installations and lets you pin the one whose provider-managed inference works. You can also change it directly:
 
 ```sh
 humansh config set providers.claude.binary /absolute/path/to/claude
@@ -73,6 +73,8 @@ humansh provider test cursor
 ```
 
 Humansh treats Cursor authentication as provider-managed and does not call its login/status commands. Known parent-shell API/auth/endpoint overrides are not inherited. If the selected distribution rejects read-only Ask mode, sandboxing, trust, or JSON output during the full test, update or reconfigure it rather than weakening those controls.
+
+If Cursor's inference check fails, quick setup prints Cursor's own bounded, credential-redacted message without trying to classify it or invent recovery steps. Fix the issue described by Cursor, then run the installer again. A fresh stopped installation removes its staged Humansh binary; an upgrade restores the previous binary. The stop is handled cleanly, so `make install` does not add a `make: *** ... Error 22` line.
 
 ## OpenRouter
 

@@ -1,6 +1,6 @@
 # Setup
 
-`humansh setup` is a guided review, not a silent application of defaults. It shows every change it intends to make and writes nothing until you confirm. This document covers the full flow; the [README](../README.md) has the short version.
+`humansh setup` uses a short default path and keeps detailed customization behind `humansh setup --advanced`. A fresh default setup asks at most two questions: which installed provider to use when there is a real choice, and whether to apply the summarized startup-file change. Nothing is written before confirmation.
 
 ## Installing
 
@@ -27,24 +27,28 @@ See [security](security.md) for why a same-host checksum establishes integrity b
 ./scripts/install.sh --local
 ```
 
-The installer replaces the binary atomically, and restores the previous binary if interactive setup does not complete. Before it commits, it verifies the installed binary against the staged build; if the binary disappeared while setup was running, the installer atomically restores it from that staged copy before starting onboarding.
+The installer replaces the binary atomically and verifies it against the staged build after guided setup. If setup needs attention, the verified binary remains installed so the displayed recovery command works; configuration and shell files remain unchanged. If the binary disappeared while setup was running, the installer atomically restores it from that staged copy. It does not start a second onboarding interaction.
 
 ## Choosing shells
 
-Setup detects and configures every supported shell on the machine, so you do not need to know or select your current one. To restrict an installation to a single shell:
+Default setup configures the login shell named by `$SHELL`. To choose a shell explicitly:
 
 ```sh
 ./scripts/install.sh --local --shell bash
 humansh setup --shell bash          # or afterwards, against the installed binary
 ```
 
-Setup verifies Zsh and Bash independently, installs the embedded integration for each usable shell under the XDG data directory, and adds one idempotent managed block to each applicable startup file.
+Setup verifies the selected shell, installs its embedded integration under the XDG data directory, and adds one idempotent managed block to its startup file. Existing installations retain every shell integration already recorded in install state. To discover and configure every compatible Zsh and Bash installation, run:
+
+```sh
+humansh setup --advanced
+```
 
 ### Bash version floor
 
 Bash integration requires **Bash 4.3 or newer**, so humansh can safely capture and restore existing Readline shell-command bindings. macOS still ships Bash 3.2; install a current one with `brew install bash`.
 
-The compatibility report lists each installed supported shell with its version. For an unsupported Bash it shows the 4.3 minimum and continues with Zsh. Rerun `humansh setup` after installing a current Bash to add its integration.
+Quick setup reports an actionable error when the selected Bash is too old. The advanced compatibility report lists installed shells, skips an unsupported Bash, and can continue with Zsh. After installing a current Bash, run `humansh setup --shell bash` to select it or `humansh setup --advanced` to add it alongside Zsh.
 
 ### Shell modes
 
@@ -52,31 +56,65 @@ Zsh supports Smart Enter, where one key classifies the line. Bash uses explicit 
 
 Each managed block exports the resolved binding values before sourcing its immutable, hashed shell asset, so changing a binding never modifies the asset itself.
 
-## The interactive flow
+## The default flow
 
-The **shell compatibility** phase lists only installed supported shells and concise versions. Startup-file activation details are held back for the final review, where you see only the managed-block patches for applicable files — never unrelated shell configuration.
+On a fresh machine, setup silently checks the login shell and installed CLI providers. If exactly one provider is usable, it selects it automatically. If several are usable, it asks one provider question. The flow separates provider choice, review, and the final next step instead of presenting a block of explanatory prose:
 
-Slow discovery and provider checks show an in-place loader on a terminal. Redirected output gets one stable `Checking…` line instead of animation. `NO_COLOR=1` disables styling; `--yes` runs setup deterministically without prompts.
+```text
+humansh setup
 
-Before writing anything, setup shows shell modes, provider and model, directory-context privacy, timeout, and shortcuts. At a shortcut prompt, type a readable value such as `Ctrl-G`, `Ctrl-X Ctrl-T`, or `Esc t`.
+Choose your AI provider
 
-Setup preserves startup-file symlinks, applies all shell changes transactionally, and refuses to apply a stale reviewed patch. Pressing Ctrl-C at a prompt or during any shell, provider, key, or model check exits setup with status 130, restores normal terminal input, and leaves credentials, configuration, and shell files unchanged.
+  1  Codex       default
+  2  Claude Code
+  3  Cursor CLI
+
+  AI provider [1]:
+
+Review
+  Shell      Zsh
+  Provider   Codex
+  Startup    Update ~/.zshrc
+  Safety     Commands wait for your review
+
+  Continue? [Y/n]:
+
+  ✓ Codex ready
+
+🎉 Humansh is ready!
+
+  Settings   `humansh setup --advanced`
+
+  Try it: open a new terminal, type `list files`, press Enter to translate, then Enter to run.
+```
+
+After confirmation, setup runs one minimal provider check, applies the already prepared startup-file plan, and ends with one example showing how to start. A healthy rerun preserves the saved provider, preferences, and installed shell set; it asks no questions and does not spend provider quota on another live check. If an update or repair would change a startup file, setup names the exact file and asks once.
+
+`--yes` accepts the concise plan non-interactively. `NO_COLOR=1` disables styling. Provider checks show an in-place loader on a terminal; redirected output gets one stable `Checking…` line instead.
+
+Setup preserves startup-file symlinks, applies all shell changes transactionally, and refuses to apply a stale reviewed plan. Pressing Ctrl-C at a prompt or during a provider check exits with status 130 and leaves configuration and shell files unchanged.
+
+## Advanced setup
+
+Run `humansh setup --advanced` to use the full six-section editor. It exposes shell compatibility, provider and executable selection, model, directory-context privacy, timeout, Smart Enter, and shortcuts, followed by the exact managed-block patch and final confirmation. At a shortcut prompt, type a readable value such as `Ctrl-G`, `Ctrl-X Ctrl-T`, or `Esc t`.
+
+OpenRouter key/model configuration and pinning a particular Claude or Cursor executable also live in the advanced flow. Existing command flags such as `--provider`, `--shell`, `--repair`, and `--no-shell-change` remain available; combine provider-specific customization with `--advanced` when the quick path directs you there.
 
 ## Providers during setup
 
-Interactive setup always shows a compact four-provider menu and asks what to use. A previously saved provider is only the default answer, not a silent choice. Troubleshooting detail stays hidden for providers you do not select.
+Quick setup asks about providers only when multiple installed CLI providers are usable. With one candidate it selects that provider automatically. A healthy existing setup silently retains the saved provider. Advanced setup shows the full four-provider menu and uses the saved provider as its default answer.
 
-The menu uses non-inference discovery: it checks whether each CLI executable exists without calling optional login, status, version, or help commands. After you choose Codex, Claude Code, or Cursor, setup discloses and sends one fixed minimal prompt through a fresh isolated subprocess. That live check may consume a small amount of provider quota.
+Provider discovery is non-inference: it checks whether each CLI executable exists without calling optional login, status, version, or help commands. After confirmation, fresh quick setup sends one fixed minimal prompt through a fresh isolated subprocess. That live check may consume a small amount of provider quota.
 
-Authentication belongs to the selected CLI distribution. Humansh neither infers its billing mode nor starts a login flow. This supports centrally managed corporate distributions whose inference command works while login subcommands are intentionally disabled. If the probe fails, setup shows the provider's bounded, redacted error text and waits while you fix the issue. Press Enter to retry the same provider in place, or answer no to return to the provider list.
+Authentication belongs to the selected CLI distribution. Humansh neither infers its billing mode nor starts a login flow. This supports centrally managed corporate distributions whose inference command works while login subcommands are intentionally disabled. If a quick-flow probe fails, setup shows the provider's message verbatim after credential/control filtering and length bounding. It does not categorize the wording or derive provider-specific recovery commands. Setup makes no changes and asks the user to fix the provider issue before retrying.
 
-If several Claude or Cursor CLI installations are present in `PATH`, setup lets you keep automatic selection or pin one exact executable. Shell aliases and the Cursor editor launcher are intentionally not used.
+If several Claude or Cursor CLI installations are present in `PATH`, advanced setup lets you keep automatic selection or pin one exact executable. Shell aliases and the Cursor editor launcher are intentionally not used.
 
-Setup requires **one live, responding provider**. With none selected it stops before writing credentials, configuration, or shell integration. The minimal probe verifies provider reachability; run `humansh provider test NAME` to verify the complete production structured-output invocation and all mandatory safety flags.
+A fresh setup or explicit provider change requires **one live, responding provider**. With none selected it stops before writing credentials, configuration, or shell integration. The minimal probe verifies provider reachability; run `humansh provider test NAME` to verify the complete production structured-output invocation and all mandatory safety flags.
 
 ### OpenRouter
 
-Interactive setup configures OpenRouter in place; the standalone `humansh provider configure openrouter` remains available for changing the model later. Both flows:
+`humansh setup --advanced --provider openrouter` configures OpenRouter in place; the standalone `humansh provider configure openrouter` remains available for changing the model later. Both flows:
 
 1. Accept the key without echo and validate it through the read-only key-status endpoint.
 2. Use read-only model metadata to require `structured_outputs`, not merely basic `response_format` support. Incompatible models are rejected before any model credits are spent, with a link to OpenRouter's filtered compatible-model list.

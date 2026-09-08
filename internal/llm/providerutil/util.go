@@ -22,9 +22,9 @@ const (
 )
 
 // ProbeDiagnostic converts one minimal CLI inference into the common
-// diagnostic contract. The prompt is a Humansh-owned constant, so bounded
-// stdout and stderr can be safely reflected after credential/control redaction.
-func ProbeDiagnostic(base llm.Diagnostic, provider llm.ProviderID, timeout time.Duration, result processrunner.Result, runErr error) llm.Diagnostic {
+// diagnostic contract. Failed provider output is reflected after bounded
+// credential/control filtering, but its wording is deliberately not parsed.
+func ProbeDiagnostic(base llm.Diagnostic, provider llm.ProviderID, _ time.Duration, result processrunner.Result, runErr error) llm.Diagnostic {
 	base.Available = false
 	base.Authenticated = false
 	base.AuthMode = "provider_managed"
@@ -45,22 +45,20 @@ func ProbeDiagnostic(base llm.Diagnostic, provider llm.ProviderID, timeout time.
 	}
 	base.LiveCheck = true
 	if runErr != nil {
-		detail := append(append(append([]byte(nil), result.Stderr...), '\n'), result.Stdout...)
-		mapped := MapCLIError(provider, timeout, detail, runErr)
-		if typed, ok := usererr.As(mapped); ok {
-			if safe := SafeExternalText(result.Stderr, result.Stdout); safe != "" {
-				typed.Summary = provider.Label() + " reported: " + safe + "\nNothing was changed or executed."
-			}
+		base.Message = SafeExternalText(result.Stderr, result.Stdout)
+		if base.Message == "" {
+			base.Message = SafeExternalText([]byte(runErr.Error()))
 		}
-		return DiagnosticFromError(base, mapped)
+		base.NextSteps = nil
+		return base
 	}
 	if strings.TrimSpace(string(result.Stdout)) != ProbeMarker {
 		detail := SafeExternalText(result.Stdout, result.Stderr)
-		base.Message = provider.Label() + " returned an unexpected response to its live check"
-		if detail != "" {
-			base.Message += ": " + detail
+		base.Message = detail
+		if base.Message == "" {
+			base.Message = provider.Label() + " returned no readiness response"
 		}
-		base.NextSteps = []llm.DiagnosticAction{{Description: "Run a full translation test", Command: "humansh provider test " + string(provider)}}
+		base.NextSteps = nil
 		return base
 	}
 	base.Installed = true
