@@ -19,6 +19,7 @@ var (
 	commandRowRE  = regexp.MustCompile(`^\s{2,}([A-Za-z0-9][A-Za-z0-9._+-]*(?:\s*,\s*[A-Za-z0-9][A-Za-z0-9._+-]*)*)\s{2,}\S`)
 	braceChoiceRE = regexp.MustCompile(`\{([A-Za-z0-9._+-]+(?:\s*,\s*[A-Za-z0-9._+-]+)+)\}`)
 	commandMetaRE = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(?:SUB)?COMMANDS?(?:$|[^A-Za-z0-9_])`)
+	optionTypeRE  = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 )
 
 var metavarWords = map[string]struct{}{
@@ -52,6 +53,10 @@ func ParseHelp(data []byte, complete bool) (NodeSpec, error) {
 	var commandSection, optionSection, synopsisSection, usageContinuation bool
 	var sawStructure, sawUsage, sawCommandMarker, sawOptionSection, sawOpaqueOptions bool
 	var usageLines []string
+	var usageForms [][]string
+	var synopsisIndent int
+	var synopsisHead string
+	synopsisBreak := true
 	declaredOptions := make(map[string]OptionSpec)
 	shortOptionDiagnostic := rejectsLongHelpOption(text)
 	type commandCandidate struct {
@@ -85,6 +90,7 @@ func ParseHelp(data []byte, complete bool) (NodeSpec, error) {
 		lower := strings.ToLower(trimmed)
 		if trimmed == "" {
 			usageContinuation = false
+			synopsisBreak = true
 			continue
 		}
 		if subcommand, ok := documentedPositionalHelpForm(trimmed); ok {
@@ -116,6 +122,7 @@ func ParseHelp(data []byte, complete bool) (NodeSpec, error) {
 			flushCommandCandidates()
 			commandSection, optionSection, synopsisSection, usageContinuation = false, false, true, false
 			sawStructure, sawUsage = true, true
+			synopsisBreak = true
 			continue
 		}
 		if isSectionHeader(trimmed) {
@@ -133,6 +140,26 @@ func ParseHelp(data []byte, complete bool) (NodeSpec, error) {
 		if usageLine || continuedUsage || synopsisSection {
 			sawStructure, sawUsage, node.OptionsKnown = true, true, true
 			usageLines = append(usageLines, line)
+			// Keep distinct invocation forms separate. Only more-indented
+			// syntax atoms can wrap a form; a repeated command head, another
+			// usage label, or a sibling line starts a new synopsis.
+			body := trimmed
+			if usageLine {
+				body = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(body[len("usage"):]), ":"))
+			}
+			if fields := strings.Fields(body); len(fields) > 0 {
+				first := fields[0]
+				indent := commandIndent(line)
+				canWrap := strings.HasPrefix(first, "[") || strings.HasPrefix(first, "<") || strings.HasPrefix(first, "-") || first == strings.ToUpper(first)
+				if usageLine || synopsisBreak || indent <= synopsisIndent || first == synopsisHead || !canWrap {
+					usageForms = append(usageForms, []string{body})
+					synopsisIndent, synopsisHead = indent, first
+				} else {
+					last := len(usageForms) - 1
+					usageForms[last] = append(usageForms[last], body)
+				}
+				synopsisBreak = false
+			}
 			parseUsageOptions(line, node.Options)
 			sawOpaqueOptions = sawOpaqueOptions || hasOpaqueOptionGroup(line)
 			if containsCommandMarker(line) || hasPositionalBraceChoice(line) {
@@ -142,7 +169,7 @@ func ParseHelp(data []byte, complete bool) (NodeSpec, error) {
 
 		if (optionSection || sawUsage) && indentedOptionLine(line) {
 			definition := optionDefinition(line)
-			parsed := parseOptionGroup(definition)
+			parsed := parseOptionGroupWithPipeAliases(definition, true, definition != strings.TrimSpace(line))
 			mergeOptions(node.Options, parsed)
 			// An indented option spelling outside a bracketed usage atom is an
 			// exact declaration even when a terse help page omits both an Options
@@ -171,10 +198,64 @@ func ParseHelp(data []byte, complete bool) (NodeSpec, error) {
 	} else {
 		node.SubcommandState = SubcommandsUnknown
 	}
+	if complete && len(node.Subcommands) == 0 && len(usageForms) == 1 {
+		node.ForwardsCommand = hasForwardedCommandTail(usageForms[0])
+	}
 	if !sawStructure || len(node.Options) == 0 && len(node.Subcommands) == 0 && !sawUsage {
 		return NodeSpec{}, errors.New("no supported help structure found")
 	}
 	return node, nil
+}
+
+// hasForwardedCommandTail recognizes a bounded synopsis such as
+// "tool run [OPTIONS] TARGET [COMMAND] [ARG...]". An explicit required operand
+// distinguishes a forwarded command from a tool's own COMMAND subcommands.
+// Alternatives, optional operands, and options after operands are deliberately
+// not inferred. The caller must establish that these lines belong to one form.
+func hasForwardedCommandTail(lines []string) bool {
+	fields := strings.Fields(strings.Join(lines, " "))
+	if len(fields) > 0 && strings.EqualFold(fields[0], "usage:") {
+		fields = fields[1:]
+	}
+	if len(fields) < 5 {
+		return false
+	}
+	switch strings.ToLower(fields[len(fields)-2]) {
+	case "command", "[command]", "<command>", "[<command>]":
+	default:
+		return false
+	}
+	switch strings.ToLower(fields[len(fields)-1]) {
+	case "[arg...]", "[args...]", "[arg]...", "[args]...", "[<arg>...]", "[<args>...]", "[<arg>]...", "[<args>]...":
+	default:
+		return false
+	}
+	options := -1
+	for index, field := range fields[:len(fields)-2] {
+		switch strings.ToLower(field) {
+		case "[options]", "[flags]", "[<options>]", "[<flags>]":
+			options = index
+		}
+	}
+	if options < 1 || options >= len(fields)-3 {
+		return false
+	}
+	for _, field := range fields[:options] {
+		if !validCommandName(field) {
+			return false
+		}
+	}
+	for _, field := range fields[options+1 : len(fields)-2] {
+		if strings.HasPrefix(field, "<") && strings.HasSuffix(field, ">") {
+			field = field[1 : len(field)-1]
+		} else if field != strings.ToUpper(field) {
+			return false
+		}
+		if !validCommandName(field) || strings.Contains(field, ".") || containsCommandMarker(field) {
+			return false
+		}
+	}
+	return true
 }
 
 func commandIndent(line string) int {
@@ -467,12 +548,12 @@ func isolatedBraceNames(line string) []string {
 func parseUsageOptions(line string, destination map[string]OptionSpec) {
 	groups := bracketGroups(line)
 	if len(groups) == 0 {
-		mergeOptions(destination, parseOptionGroupWithPipeAliases(line, false))
+		mergeOptions(destination, parseOptionGroupWithPipeAliases(line, false, false))
 		return
 	}
 	for _, group := range groups {
 		if strings.Contains(group, "-") {
-			mergeOptions(destination, parseOptionGroupWithPipeAliases(group, false))
+			mergeOptions(destination, parseOptionGroupWithPipeAliases(group, false, false))
 		}
 	}
 }
@@ -689,11 +770,7 @@ func optionDefinition(line string) string {
 	return trimmed
 }
 
-func parseOptionGroup(definition string) map[string]OptionSpec {
-	return parseOptionGroupWithPipeAliases(definition, true)
-}
-
-func parseOptionGroupWithPipeAliases(definition string, sharePipeValues bool) map[string]OptionSpec {
+func parseOptionGroupWithPipeAliases(definition string, sharePipeValues, typedValues bool) map[string]OptionSpec {
 	out := make(map[string]OptionSpec)
 	definition = negatedOptRE.ReplaceAllString(definition, "--$1, --no-$1")
 	matches := optionMatches(definition)
@@ -713,7 +790,7 @@ func parseOptionGroupWithPipeAliases(definition string, sharePipeValues bool) ma
 			end = matches[index+1][0]
 		}
 		fragment := definition[match[1]:end]
-		spec := optionFromFragment(name, fragment)
+		spec := optionFromFragment(name, fragment, typedValues)
 		out[name] = mergeOption(out[name], spec)
 		if spec.Value > groupValue {
 			groupValue = spec.Value
@@ -757,7 +834,7 @@ func optionMatches(definition string) [][]int {
 	return out
 }
 
-func optionFromFragment(name, fragment string) OptionSpec {
+func optionFromFragment(name, fragment string, typedValues bool) OptionSpec {
 	spec := OptionSpec{Terminal: name == "--help" || name == "--version"}
 	fragment = strings.TrimRight(fragment, " \t,|)")
 	if fragment == "" {
@@ -777,7 +854,10 @@ func optionFromFragment(name, fragment string) OptionSpec {
 		}
 		return spec
 	}
-	if separate && beginsMetavar(trimmed) {
+	// A column-delimited option definition can advertise arbitrary lowercase
+	// types (for example "--network network  Connect ..."). Do not use that
+	// inference in a synopsis or an undelimited prose description.
+	if separate && (beginsMetavar(trimmed) || typedValues && optionTypeRE.MatchString(trimmed)) {
 		spec.AllowSeparate = true
 		if optional {
 			spec.Value = OptionalValue

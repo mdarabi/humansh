@@ -107,6 +107,69 @@ func TestHelpAnalyzerTraversesGenericInstalledGrammar(t *testing.T) {
 	}
 }
 
+func TestHelpAnalyzerPreservesForwardedCommandBoundary(t *testing.T) {
+	t.Parallel()
+	root, err := ParseHelp([]byte("Usage: fixturebox COMMAND\n\nCommands:\n  run  Run a command\n"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := ParseHelp([]byte(`Usage: fixturebox run [OPTIONS] TARGET [COMMAND] [ARG...]
+
+Options:
+  --network network  Connect to a network
+  --rm               Remove after exit
+  --help             Print usage
+`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		input    string
+		stop     StopReason
+		boundary int
+	}{
+		{"fixturebox run --rm --network host node curl --silent --show-error --fail --max-time 8 http://127.0.0.1:3000/api/v1/version", StopComplete, 5},
+		{"fixturebox run node curl --silent", StopComplete, 2},
+		{"fixturebox run node curl --network", StopComplete, 2},
+		{"fixturebox run node curl --help is failing", StopComplete, 2},
+		{"fixturebox run -- node curl --help is failing", StopComplete, 3},
+		{"fixturebox run --network host --typo node curl --silent", StopUnknownOption, 4},
+		{"fixturebox run --typo node curl --silent", StopUnknownOption, 2},
+		{"fixturebox run --network", StopMissingOptionValue, 3},
+		{"fixturebox run --network --rm node curl", StopMissingOptionValue, 3},
+		{`fixturebox run "--rm" --typo node curl`, StopDynamicShellWord, 2},
+		{`fixturebox run '--rm' --typo node curl`, StopDynamicShellWord, 2},
+		{`fixturebox run --network host "--rm" --typo node curl`, StopDynamicShellWord, 4},
+		{`fixturebox run $flags --typo node curl`, StopDynamicShellWord, 2},
+		{`fixturebox run \--rm --typo node curl`, StopDynamicShellWord, 2},
+		{`fixturebox run * --typo node curl`, StopDynamicShellWord, 2},
+		{`fixturebox run {node,--rm} --typo node curl`, StopDynamicShellWord, 2},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			session := &fakeHelpSession{nodes: map[string]HelpResult{
+				"": {Node: root, Status: HelpOK}, "run": {Node: run, Status: HelpOK},
+			}}
+			analysis := NewAnalyzer(&fakeHelpSource{session: session}).Analyze(context.Background(), invocation(test.input))
+			if analysis.StopReason != test.stop || analysis.Boundary != test.boundary {
+				t.Fatalf("analysis=%+v annotations=%+v", analysis, analysis.Annotations)
+			}
+			if test.stop == StopComplete {
+				if analysis.Coverage != CoveragePartial || analysis.Uncertain() {
+					t.Fatalf("forwarded command must remain partial without a structural veto: %+v", analysis)
+				}
+				for index := test.boundary; index < len(analysis.Annotations); index++ {
+					if analysis.RoleAt(index) != RoleForwarded {
+						t.Errorf("forwarded word %d was not kept inspectable: %+v", index, analysis.Annotations)
+					}
+				}
+			}
+			if strings.Join(session.calls, ",") != ",run" {
+				t.Fatalf("forwarded command reached a help probe: %v", session.calls)
+			}
+		})
+	}
+}
+
 func TestTraversalNeverProbesAnUndocumentedWord(t *testing.T) {
 	t.Parallel()
 	source := fixtureHelpSource()
@@ -265,7 +328,7 @@ func invocation(input string) Invocation {
 	words := make([]Word, len(parts))
 	for index, part := range parts {
 		quoted := strings.HasPrefix(part, `"`) || strings.HasPrefix(part, `'`)
-		words[index] = Word{Text: strings.Trim(part, `'"`), Static: !quoted, Quoted: quoted}
+		words[index] = Word{Text: strings.Trim(part, `'"`), Static: !quoted && !strings.ContainsAny(part, "\\$`"), Quoted: quoted}
 	}
 	return Invocation{Words: words}
 }

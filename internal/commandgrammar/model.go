@@ -57,6 +57,9 @@ const (
 	RoleOptionValue Role = "option_value"
 	RolePositional  Role = "positional"
 	RoleUnexpected  Role = "unexpected"
+	// Forwarded words have not been validated against a command's help. Their
+	// non-flag words must remain inspectable even alongside forwarded flags.
+	RoleForwarded Role = "forwarded"
 )
 
 type Annotation struct {
@@ -132,7 +135,11 @@ type NodeSpec struct {
 	SubcommandState     SubcommandState
 	SubcommandsComplete bool
 	AcceptsPositionals  bool
-	Complete            bool
+	// ForwardsCommand marks a synopsis with leading options, required operands,
+	// and a trailing COMMAND [ARG...]. The operand tail is outside this node's
+	// option grammar and must remain inspectable, never a recursive help probe.
+	ForwardsCommand bool
+	Complete        bool
 }
 
 // ExecutableRef names the statically decoded command and, when supplied by a

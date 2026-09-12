@@ -213,6 +213,74 @@ All commands:
 	}
 }
 
+func TestParseHelpRecognizesOnlyBoundedForwardedCommandTails(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, help string
+		incomplete bool
+		want       bool
+	}{
+		{name: "container-run", help: "Usage: box run [OPTIONS] IMAGE [COMMAND] [ARG...]", want: true},
+		{name: "container-exec", help: "Usage: box exec [OPTIONS] CONTAINER COMMAND [ARG...]", want: true},
+		{name: "wrapped", help: "Usage:\n  runner [FLAGS] <target>\n    <command> [<args>]...", want: true},
+		{name: "wrapped-inline-usage", help: "Usage: runner [OPTIONS] TARGET\n    COMMAND [ARG...]", want: true},
+		{name: "multiple-required-operands", help: "Usage: runner [OPTIONS] HOST USER COMMAND [ARGS]...", want: true},
+		{name: "root-subcommands", help: "Usage: box [OPTIONS] COMMAND [ARG...]"},
+		{name: "listed-subcommands", help: "Usage: box [OPTIONS] TARGET COMMAND [ARG...]\n\nCommands:\n  status  Show status"},
+		{name: "ordinary-operands", help: "Usage: box [OPTIONS] FILE [FILE...]"},
+		{name: "optional-target", help: "Usage: box [OPTIONS] [TARGET] COMMAND [ARG...]"},
+		{name: "variable-targets", help: "Usage: box [OPTIONS] TARGET... COMMAND [ARG...]"},
+		{name: "interspersed-options", help: "Usage: box [OPTIONS] TARGET [--local] COMMAND [ARG...]"},
+		{name: "ambiguous-alternatives", help: "Usage: box [OPTIONS] TARGET | FILE COMMAND [ARG...]"},
+		{name: "no-argument-tail", help: "Usage: box [OPTIONS] TARGET COMMAND"},
+		{name: "truncated-help", help: "Usage: box [OPTIONS] TARGET COMMAND [ARG...]", incomplete: true},
+		{name: "conflicting-synopses", help: "Usage: box [OPTIONS] FILE\nUsage: box [OPTIONS] TARGET COMMAND [ARG...]"},
+		{name: "sibling-usage-forms", help: "Usage:\n  tool inspect FILE\n  tool [OPTIONS] TARGET COMMAND [ARG...]"},
+		{name: "sibling-synopsis-forms", help: "SYNOPSIS\n  tool inspect FILE\n  tool [OPTIONS] TARGET COMMAND [ARG...]"},
+		{name: "repeated-indented-head", help: "Usage: tool inspect FILE\n    tool [OPTIONS] TARGET COMMAND [ARG...]"},
+		{name: "different-command-head", help: "Usage:\n  tool inspect FILE\n    alternative [OPTIONS] TARGET COMMAND [ARG...]"},
+		{name: "blank-separated-forms", help: "Usage:\n  tool inspect FILE\n\n  tool [OPTIONS] TARGET COMMAND [ARG...]"},
+		{name: "reverse-conflicting-forms", help: "Usage:\n  tool [OPTIONS] TARGET COMMAND [ARG...]\n  tool inspect FILE"},
+		{name: "prose-only", help: "Usage: box [OPTIONS] FILE\n\nFor example: box [OPTIONS] TARGET COMMAND [ARG...]"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node, err := ParseHelp([]byte(test.help), !test.incomplete)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if node.ForwardsCommand != test.want {
+				t.Fatalf("ForwardsCommand=%t, want %t for %q", node.ForwardsCommand, test.want, test.help)
+			}
+		})
+	}
+}
+
+func TestParseHelpKeepsCustomOptionTypesSeparateFromProse(t *testing.T) {
+	t.Parallel()
+	node, err := ParseHelp([]byte(`Usage: box [OPTIONS] FILE
+
+Options:
+  -n, --network network  Connect to a network
+      --device gpu-request  Select a device
+      --rm               Remove after exit
+      --quiet silence
+      --verbose print detailed output
+`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"-n", "--network", "--device"} {
+		if got := node.Options[name]; got.Value != RequiredValue || !got.AllowSeparate {
+			t.Errorf("custom option type was lost for %s: %+v", name, got)
+		}
+	}
+	for _, name := range []string{"--rm", "--quiet", "--verbose"} {
+		if got := node.Options[name]; got.Value != NoValue {
+			t.Errorf("prose became a value for %s: %+v", name, got)
+		}
+	}
+}
+
 func TestParsedHelpAcceptsPositionalsAlongsideSubcommands(t *testing.T) {
 	t.Parallel()
 	root, err := ParseHelp([]byte(`Usage: zellij [OPTIONS] [COMMAND]

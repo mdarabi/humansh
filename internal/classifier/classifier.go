@@ -355,6 +355,14 @@ func inspectableGrammarTail(tokens []token, analysis commandgrammar.Analysis) []
 		switch analysis.RoleAt(index) {
 		case commandgrammar.RolePositional, commandgrammar.RoleUnexpected:
 			out = append(out, value)
+		case commandgrammar.RoleForwarded:
+			// A forwarded flag is not evidence that all later words are command
+			// syntax. Its arity is unknown: omit only the flag spelling, never
+			// assume that a following English word is an opaque option value.
+			if !value.quoted && flagRE.MatchString(value.text) {
+				continue
+			}
+			out = append(out, value)
 		}
 	}
 	return out
