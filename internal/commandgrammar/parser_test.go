@@ -223,6 +223,7 @@ func TestParseHelpRecognizesOnlyBoundedForwardedCommandTails(t *testing.T) {
 		{name: "container-run", help: "Usage: box run [OPTIONS] IMAGE [COMMAND] [ARG...]", want: true},
 		{name: "container-exec", help: "Usage: box exec [OPTIONS] CONTAINER COMMAND [ARG...]", want: true},
 		{name: "wrapped", help: "Usage:\n  runner [FLAGS] <target>\n    <command> [<args>]...", want: true},
+		{name: "wrapped-inline-usage", help: "Usage: runner [OPTIONS] TARGET\n    COMMAND [ARG...]", want: true},
 		{name: "multiple-required-operands", help: "Usage: runner [OPTIONS] HOST USER COMMAND [ARGS]...", want: true},
 		{name: "root-subcommands", help: "Usage: box [OPTIONS] COMMAND [ARG...]"},
 		{name: "listed-subcommands", help: "Usage: box [OPTIONS] TARGET COMMAND [ARG...]\n\nCommands:\n  status  Show status"},
@@ -234,6 +235,12 @@ func TestParseHelpRecognizesOnlyBoundedForwardedCommandTails(t *testing.T) {
 		{name: "no-argument-tail", help: "Usage: box [OPTIONS] TARGET COMMAND"},
 		{name: "truncated-help", help: "Usage: box [OPTIONS] TARGET COMMAND [ARG...]", incomplete: true},
 		{name: "conflicting-synopses", help: "Usage: box [OPTIONS] FILE\nUsage: box [OPTIONS] TARGET COMMAND [ARG...]"},
+		{name: "sibling-usage-forms", help: "Usage:\n  tool inspect FILE\n  tool [OPTIONS] TARGET COMMAND [ARG...]"},
+		{name: "sibling-synopsis-forms", help: "SYNOPSIS\n  tool inspect FILE\n  tool [OPTIONS] TARGET COMMAND [ARG...]"},
+		{name: "repeated-indented-head", help: "Usage: tool inspect FILE\n    tool [OPTIONS] TARGET COMMAND [ARG...]"},
+		{name: "different-command-head", help: "Usage:\n  tool inspect FILE\n    alternative [OPTIONS] TARGET COMMAND [ARG...]"},
+		{name: "blank-separated-forms", help: "Usage:\n  tool inspect FILE\n\n  tool [OPTIONS] TARGET COMMAND [ARG...]"},
+		{name: "reverse-conflicting-forms", help: "Usage:\n  tool [OPTIONS] TARGET COMMAND [ARG...]\n  tool inspect FILE"},
 		{name: "prose-only", help: "Usage: box [OPTIONS] FILE\n\nFor example: box [OPTIONS] TARGET COMMAND [ARG...]"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

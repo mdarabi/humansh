@@ -132,10 +132,18 @@ Options:
 		{"fixturebox run node curl --silent", StopComplete, 2},
 		{"fixturebox run node curl --network", StopComplete, 2},
 		{"fixturebox run node curl --help is failing", StopComplete, 2},
+		{"fixturebox run -- node curl --help is failing", StopComplete, 3},
 		{"fixturebox run --network host --typo node curl --silent", StopUnknownOption, 4},
 		{"fixturebox run --typo node curl --silent", StopUnknownOption, 2},
 		{"fixturebox run --network", StopMissingOptionValue, 3},
 		{"fixturebox run --network --rm node curl", StopMissingOptionValue, 3},
+		{`fixturebox run "--rm" --typo node curl`, StopDynamicShellWord, 2},
+		{`fixturebox run '--rm' --typo node curl`, StopDynamicShellWord, 2},
+		{`fixturebox run --network host "--rm" --typo node curl`, StopDynamicShellWord, 4},
+		{`fixturebox run $flags --typo node curl`, StopDynamicShellWord, 2},
+		{`fixturebox run \--rm --typo node curl`, StopDynamicShellWord, 2},
+		{`fixturebox run * --typo node curl`, StopDynamicShellWord, 2},
+		{`fixturebox run {node,--rm} --typo node curl`, StopDynamicShellWord, 2},
 	} {
 		t.Run(test.input, func(t *testing.T) {
 			session := &fakeHelpSession{nodes: map[string]HelpResult{
@@ -150,7 +158,7 @@ Options:
 					t.Fatalf("forwarded command must remain partial without a structural veto: %+v", analysis)
 				}
 				for index := test.boundary; index < len(analysis.Annotations); index++ {
-					if analysis.RoleAt(index) != RolePositional {
+					if analysis.RoleAt(index) != RoleForwarded {
 						t.Errorf("forwarded word %d was not kept inspectable: %+v", index, analysis.Annotations)
 					}
 				}
@@ -320,7 +328,7 @@ func invocation(input string) Invocation {
 	words := make([]Word, len(parts))
 	for index, part := range parts {
 		quoted := strings.HasPrefix(part, `"`) || strings.HasPrefix(part, `'`)
-		words[index] = Word{Text: strings.Trim(part, `'"`), Static: !quoted, Quoted: quoted}
+		words[index] = Word{Text: strings.Trim(part, `'"`), Static: !quoted && !strings.ContainsAny(part, "\\$`"), Quoted: quoted}
 	}
 	return Invocation{Words: words}
 }

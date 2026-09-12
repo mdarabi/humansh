@@ -168,7 +168,7 @@ func TestRuntimeHelpSourcePreservesInstalledDockerCommandTail(t *testing.T) {
 	inv := invocation("docker run --rm --network host docker.io/library/node@sha256:6dac556d980b7f0e5498d08f08cee0ca67798b4ad6c23964a9214920e67758d0 curl --silent --show-error --fail --max-time 8 http://127.0.0.1:3000/api/v1/version")
 	inv.ExecutablePath = path
 	analysis := testRuntimeAnalyzer(RuntimeHelpSource{Timeout: 5 * time.Second}).Analyze(context.Background(), inv)
-	if analysis.Coverage != CoveragePartial || analysis.StopReason != StopComplete || analysis.Boundary != 5 || analysis.RoleAt(4) != RoleOptionValue || analysis.RoleAt(7) != RolePositional {
+	if analysis.Coverage != CoveragePartial || analysis.StopReason != StopComplete || analysis.Boundary != 5 || analysis.RoleAt(4) != RoleOptionValue || analysis.RoleAt(7) != RoleForwarded {
 		t.Fatalf("installed Docker command tail analysis=%+v annotations=%+v", analysis, analysis.Annotations)
 	}
 }

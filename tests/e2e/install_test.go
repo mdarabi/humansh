@@ -135,6 +135,27 @@ dump_buffer "$HUMANSH_E2E_COMMAND" || exit 153
 		fixture.requireProviderEvents(t, "", nil)
 	})
 
+	for _, test := range []struct {
+		name, input, executable string
+		helpCalls               [][]string
+	}{
+		{"forwarded flags preserve English tails", "docker run node curl --help is failing please authenticate", "docker", [][]string{{"--help"}, {"run", "--help"}}},
+		{"forwarded flags after an explicit separator preserve English tails", "docker run -- node curl --help is failing please authenticate", "docker", [][]string{{"--help"}, {"run", "--help"}}},
+		{"quoted leading flags cannot establish an operand boundary", `docker run "--rm" --typo node curl`, "docker", [][]string{{"--help"}, {"run", "--help"}}},
+		{"dynamic leading flags cannot establish an operand boundary", "docker run $HUMANSH_E2E_DOCKER_FLAGS --typo node curl", "docker", [][]string{{"--help"}, {"run", "--help"}}},
+		{"conflicting synopses do not enable forwarding", "tool inspect readme --typo", "tool", [][]string{{"--help"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture.runZshScenario(t, `
+zpty -w -n H "$HUMANSH_E2E_COMMAND"$'\r'
+wait_for 'Not sure whether this is English or a command' 'HUMANSH_E2E_UNEXPECTED_EXECUTION' || exit 154
+dump_buffer "$HUMANSH_E2E_COMMAND" || exit 155
+`, "HUMANSH_E2E_COMMAND", test.input, "HUMANSH_E2E_DOCKER_FLAGS", "--rm")
+			fixture.requireCommandCalls(t, test.executable, test.helpCalls)
+			fixture.requireProviderEvents(t, "", nil)
+		})
+	}
+
 	t.Run("natural language is translated for review and Escape clears it", func(t *testing.T) {
 		fixture.runZshScenario(t, `
 zpty -w -n H "$HUMANSH_E2E_REQUEST"$'\r'
@@ -373,6 +394,13 @@ func installZshFixture(t *testing.T) *installedFixture {
 	if output, err := buildFixture.CombinedOutput(); err != nil {
 		t.Fatalf("build deterministic Docker fixture: %v\n%s", err, output)
 	}
+	fixtureData, err := os.ReadFile(fakeDocker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(providerBin, "tool"), fixtureData, 0o700); err != nil {
+		t.Fatal(err)
+	}
 
 	env := isolatedEnvironment(t, home, providerBin)
 	installer := exec.Command("sh", filepath.Join(repo, "scripts", "install.sh"), "--local", "--shell", "zsh")
@@ -466,8 +494,10 @@ func (fixture *installedFixture) runZshScenario(t *testing.T, body string, varia
 	if err := os.WriteFile(fixture.callLog, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(fixture.providerBin, "docker.calls.jsonl"), nil, 0o600); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"docker", "tool"} {
+		if err := os.WriteFile(filepath.Join(fixture.providerBin, name+".calls.jsonl"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Cleanup(func() { fixture.cleanupProviderProcesses(t) })
 
@@ -487,10 +517,14 @@ reset_window() {
   HUMANSH_E2E_WINDOW=''
 }
 wait_for() {
-  local pattern=$1
+  local pattern=$1 rejected=${2:-}
   local -i attempt
   for (( attempt = 1; attempt <= 1500; attempt++ )); do
     drain_output
+    if [[ -n $rejected && $HUMANSH_E2E_WINDOW == *"${rejected}"* ]]; then
+      print -ru2 -- "unexpected ${rejected}; received ${(V)HUMANSH_E2E_ALL}"
+      return 1
+    fi
     [[ $HUMANSH_E2E_WINDOW == *"${pattern}"* ]] && return 0
     sleep 0.02
   done
@@ -591,7 +625,16 @@ zpty -d H
 
 func (fixture *installedFixture) requireDockerCalls(t *testing.T, executed []string) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(fixture.providerBin, "docker.calls.jsonl"))
+	want := [][]string{{"--help"}, {"run", "--help"}}
+	if executed != nil {
+		want = append(want, executed)
+	}
+	fixture.requireCommandCalls(t, "docker", want)
+}
+
+func (fixture *installedFixture) requireCommandCalls(t *testing.T, name string, want [][]string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(fixture.providerBin, name+".calls.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,18 +642,14 @@ func (fixture *installedFixture) requireDockerCalls(t *testing.T, executed []str
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		var args []string
 		if err := json.Unmarshal([]byte(line), &args); err != nil {
-			t.Fatalf("decode Docker fixture call: %v", err)
+			t.Fatalf("decode %s fixture call: %v", name, err)
 		}
 		calls = append(calls, args)
-	}
-	want := [][]string{{"--help"}, {"run", "--help"}}
-	if executed != nil {
-		want = append(want, executed)
 	}
 	gotJSON, _ := json.Marshal(calls)
 	wantJSON, _ := json.Marshal(want)
 	if string(gotJSON) != string(wantJSON) {
-		t.Fatalf("Docker calls=%s, want %s; only fixed help probes and the accepted original command may run", gotJSON, wantJSON)
+		t.Fatalf("%s calls=%s, want %s; only fixed help probes and the accepted original command may run", name, gotJSON, wantJSON)
 	}
 }
 

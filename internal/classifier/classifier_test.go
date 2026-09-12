@@ -225,11 +225,26 @@ func TestForwardedCommandClassificationAcrossShells(t *testing.T) {
 			{"fixturevcs run --network host --typo node curl --silent", Ambiguous},
 			{"fixturevcs run --network", Ambiguous},
 			{"fixturevcs run node is failing please authenticate", Ambiguous},
+			{"fixturevcs run node curl --help is failing please authenticate", Ambiguous},
+			{"fixturevcs run node curl --silent --show-error is failing please authenticate", Ambiguous},
+			{"fixturevcs run -- node curl --help is failing please authenticate", Ambiguous},
+			{"fixturevcs run node curl --data is failing please authenticate", Ambiguous},
+			{`fixturevcs run node curl --data "is failing please authenticate"`, Literal},
+			{"fixturevcs run node curl --help", Literal},
+			{`fixturevcs run "--rm" --typo node curl`, Ambiguous},
+			{`fixturevcs run '--rm' --typo node curl`, Ambiguous},
+			{`fixturevcs run $flags --typo node curl`, Ambiguous},
+			{`fixturevcs run \--rm --typo node curl`, Ambiguous},
+			{`fixturevcs run * --typo node curl`, Ambiguous},
+			{`fixturevcs run --network "host" node curl --silent`, Literal},
 		} {
 			t.Run(shellID+"/"+test.input, func(t *testing.T) {
 				result := classifierWithFixtureGrammar().Classify(Input{Raw: test.input, Shell: shellID, FirstTokenKind: shell.TokenCommand})
 				if result.Outcome != test.want || result.CommandGrammar == nil {
 					t.Fatalf("classification=%+v, want %s", result, test.want)
+				}
+				if test.want == Ambiguous && strings.Contains(test.input, "is failing") && !hasEvidence(result, "natural_language_tail") {
+					t.Fatalf("forwarded words lost English-tail evidence: %+v", result)
 				}
 			})
 		}

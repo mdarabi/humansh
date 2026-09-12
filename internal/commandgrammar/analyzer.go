@@ -159,6 +159,10 @@ func consumeLeadingOptions(words []Word, index int, node NodeSpec, analysis *Ana
 		if word.Text == "--" {
 			analysis.Annotations[index].Role = RoleOption
 			index++
+			if node.ForwardsCommand {
+				*analysis = forwardTail(*analysis, index)
+				return index, false, true
+			}
 			markRemainder(analysis, index, RolePositional)
 			return len(words), false, true
 		}
@@ -191,13 +195,13 @@ func consumeLeaf(words []Word, index int, node NodeSpec, analysis Analysis) Anal
 		analysis.Coverage = CoveragePartial
 	}
 	if node.ForwardsCommand && index < len(words) {
-		// Leading options have been checked. The synopsis places the remaining
-		// operands and forwarded command outside those options. Keep that tail
-		// visible to English scoring without claiming to validate or probe it.
-		markRemainder(&analysis, index, RolePositional)
-		analysis.Coverage = CoveragePartial
-		analysis.Boundary = index
-		return finish(analysis, index)
+		// Leading-option parsing can also stop at an undecoded shell word. It
+		// is not evidence of an operand: quotes/expansions could conceal flags.
+		word := words[index]
+		if !word.Static || word.Quoted || strings.ContainsAny(word.Text, "*?[]{}~") {
+			return stopAt(analysis, index, CoverageIndeterminate, StopDynamicShellWord)
+		}
+		return forwardTail(analysis, index)
 	}
 	for index < len(words) {
 		word := words[index]
@@ -229,6 +233,15 @@ func consumeLeaf(words []Word, index int, node NodeSpec, analysis Analysis) Anal
 		analysis.Annotations[index].Role = RolePositional
 		index++
 	}
+	return finish(analysis, index)
+}
+
+func forwardTail(analysis Analysis, index int) Analysis {
+	// Distinguish unvalidated forwarded words from ordinary operands so their
+	// flag spellings cannot disable inspection of the remaining English tail.
+	markRemainder(&analysis, index, RoleForwarded)
+	analysis.Coverage = CoveragePartial
+	analysis.Boundary = index
 	return finish(analysis, index)
 }
 

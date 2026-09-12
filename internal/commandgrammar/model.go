@@ -57,6 +57,9 @@ const (
 	RoleOptionValue Role = "option_value"
 	RolePositional  Role = "positional"
 	RoleUnexpected  Role = "unexpected"
+	// Forwarded words have not been validated against a command's help. Their
+	// non-flag words must remain inspectable even alongside forwarded flags.
+	RoleForwarded Role = "forwarded"
 )
 
 type Annotation struct {

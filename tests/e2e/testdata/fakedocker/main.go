@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -24,6 +25,15 @@ func main() {
 	}
 	if err := log.Close(); err != nil {
 		panic(err)
+	}
+	if filepath.Base(path) == "tool" && strings.Join(os.Args[1:], "\x00") == "--help" {
+		fmt.Println(`Usage:
+  tool inspect FILE
+  tool [OPTIONS] TARGET COMMAND [ARG...]
+
+Options:
+  --help  Print usage`)
+		return
 	}
 
 	switch strings.Join(os.Args[1:], "\x00") {
@@ -48,7 +58,7 @@ Options:
 	case "run\x00--rm\x00--network\x00host\x00docker.io/library/node@sha256:6dac556d980b7f0e5498d08f08cee0ca67798b4ad6c23964a9214920e67758d0\x00curl\x00--silent\x00--show-error\x00--fail\x00--max-time\x008\x00http://127.0.0.1:3000/api/v1/version":
 		fmt.Println("HUMANSH_E2E_DOCKER_EXECUTED")
 	default:
-		fmt.Fprintf(os.Stderr, "unexpected Docker fixture invocation: %q\n", os.Args[1:])
+		fmt.Fprintf(os.Stderr, "HUMANSH_E2E_UNEXPECTED_EXECUTION: %q\n", os.Args[1:])
 		os.Exit(97)
 	}
 }

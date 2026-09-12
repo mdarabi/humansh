@@ -53,6 +53,10 @@ func ParseHelp(data []byte, complete bool) (NodeSpec, error) {
 	var commandSection, optionSection, synopsisSection, usageContinuation bool
 	var sawStructure, sawUsage, sawCommandMarker, sawOptionSection, sawOpaqueOptions bool
 	var usageLines []string
+	var usageForms [][]string
+	var synopsisIndent int
+	var synopsisHead string
+	synopsisBreak := true
 	declaredOptions := make(map[string]OptionSpec)
 	shortOptionDiagnostic := rejectsLongHelpOption(text)
 	type commandCandidate struct {
@@ -86,6 +90,7 @@ func ParseHelp(data []byte, complete bool) (NodeSpec, error) {
 		lower := strings.ToLower(trimmed)
 		if trimmed == "" {
 			usageContinuation = false
+			synopsisBreak = true
 			continue
 		}
 		if subcommand, ok := documentedPositionalHelpForm(trimmed); ok {
@@ -117,6 +122,7 @@ func ParseHelp(data []byte, complete bool) (NodeSpec, error) {
 			flushCommandCandidates()
 			commandSection, optionSection, synopsisSection, usageContinuation = false, false, true, false
 			sawStructure, sawUsage = true, true
+			synopsisBreak = true
 			continue
 		}
 		if isSectionHeader(trimmed) {
@@ -134,6 +140,26 @@ func ParseHelp(data []byte, complete bool) (NodeSpec, error) {
 		if usageLine || continuedUsage || synopsisSection {
 			sawStructure, sawUsage, node.OptionsKnown = true, true, true
 			usageLines = append(usageLines, line)
+			// Keep distinct invocation forms separate. Only more-indented
+			// syntax atoms can wrap a form; a repeated command head, another
+			// usage label, or a sibling line starts a new synopsis.
+			body := trimmed
+			if usageLine {
+				body = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(body[len("usage"):]), ":"))
+			}
+			if fields := strings.Fields(body); len(fields) > 0 {
+				first := fields[0]
+				indent := commandIndent(line)
+				canWrap := strings.HasPrefix(first, "[") || strings.HasPrefix(first, "<") || strings.HasPrefix(first, "-") || first == strings.ToUpper(first)
+				if usageLine || synopsisBreak || indent <= synopsisIndent || first == synopsisHead || !canWrap {
+					usageForms = append(usageForms, []string{body})
+					synopsisIndent, synopsisHead = indent, first
+				} else {
+					last := len(usageForms) - 1
+					usageForms[last] = append(usageForms[last], body)
+				}
+				synopsisBreak = false
+			}
 			parseUsageOptions(line, node.Options)
 			sawOpaqueOptions = sawOpaqueOptions || hasOpaqueOptionGroup(line)
 			if containsCommandMarker(line) || hasPositionalBraceChoice(line) {
@@ -172,7 +198,9 @@ func ParseHelp(data []byte, complete bool) (NodeSpec, error) {
 	} else {
 		node.SubcommandState = SubcommandsUnknown
 	}
-	node.ForwardsCommand = complete && len(node.Subcommands) == 0 && hasForwardedCommandTail(usageLines)
+	if complete && len(node.Subcommands) == 0 && len(usageForms) == 1 {
+		node.ForwardsCommand = hasForwardedCommandTail(usageForms[0])
+	}
 	if !sawStructure || len(node.Options) == 0 && len(node.Subcommands) == 0 && !sawUsage {
 		return NodeSpec{}, errors.New("no supported help structure found")
 	}
@@ -183,7 +211,7 @@ func ParseHelp(data []byte, complete bool) (NodeSpec, error) {
 // "tool run [OPTIONS] TARGET [COMMAND] [ARG...]". An explicit required operand
 // distinguishes a forwarded command from a tool's own COMMAND subcommands.
 // Alternatives, optional operands, and options after operands are deliberately
-// not inferred. Multiple conflicting synopses also fail this structural match.
+// not inferred. The caller must establish that these lines belong to one form.
 func hasForwardedCommandTail(lines []string) bool {
 	fields := strings.Fields(strings.Join(lines, " "))
 	if len(fields) > 0 && strings.EqualFold(fields[0], "usage:") {
