@@ -160,6 +160,19 @@ func TestRuntimeHelpSourceParsesInstalledBSDRMCompactFlags(t *testing.T) {
 	}
 }
 
+func TestRuntimeHelpSourcePreservesInstalledDockerCommandTail(t *testing.T) {
+	path, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skip("Docker CLI is not installed; deterministic installed-shell coverage runs separately")
+	}
+	inv := invocation("docker run --rm --network host docker.io/library/node@sha256:6dac556d980b7f0e5498d08f08cee0ca67798b4ad6c23964a9214920e67758d0 curl --silent --show-error --fail --max-time 8 http://127.0.0.1:3000/api/v1/version")
+	inv.ExecutablePath = path
+	analysis := testRuntimeAnalyzer(RuntimeHelpSource{Timeout: 5 * time.Second}).Analyze(context.Background(), inv)
+	if analysis.Coverage != CoveragePartial || analysis.StopReason != StopComplete || analysis.Boundary != 5 || analysis.RoleAt(4) != RoleOptionValue || analysis.RoleAt(7) != RolePositional {
+		t.Fatalf("installed Docker command tail analysis=%+v annotations=%+v", analysis, analysis.Annotations)
+	}
+}
+
 func TestRuntimeHelpSourceTimesOutAndFallsBack(t *testing.T) {
 	original := buildHelpFixture(t, "fixturevcs")
 	path := copyExecutable(t, original, "fixturehang")

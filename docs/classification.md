@@ -45,6 +45,8 @@ Classifier result version 2 can include a raw-free `command_grammar` summary wit
 
 Only positional and unexpected words remain eligible for English-tail evidence. Documented option values—including free-form values such as `git commit -m "please authenticate"`—are excluded. Positionals stay inspectable because help syntax cannot determine intent: a command may accept arbitrary operands, so a grammatically possible invocation can still be an English request.
 
+A bounded synopsis such as `tool run [OPTIONS] TARGET [COMMAND] [ARG...]` also establishes a forwarded command tail. The analyzer validates leading options and their values, then leaves the operand tail positional with partial coverage. This keeps `docker run IMAGE curl --silent` from checking curl's flags against Docker's option list. The forwarded command is never help-probed, and its words remain eligible for English-tail evidence. Inference requires complete help, a required operand before `COMMAND`, a repeated argument tail, and no listed subcommands or conflicting synopsis. Column-delimited option definitions retain custom lowercase value types, so `--network network` consumes its value before the operand boundary.
+
 ```text
 git status                                      → literal
 git --no-pager status --short                   → literal

@@ -190,6 +190,15 @@ func consumeLeaf(words []Word, index int, node NodeSpec, analysis Analysis) Anal
 	if node.SubcommandState == SubcommandsUnknown || !node.Complete {
 		analysis.Coverage = CoveragePartial
 	}
+	if node.ForwardsCommand && index < len(words) {
+		// Leading options have been checked. The synopsis places the remaining
+		// operands and forwarded command outside those options. Keep that tail
+		// visible to English scoring without claiming to validate or probe it.
+		markRemainder(&analysis, index, RolePositional)
+		analysis.Coverage = CoveragePartial
+		analysis.Boundary = index
+		return finish(analysis, index)
+	}
 	for index < len(words) {
 		word := words[index]
 		if word.Static && !word.Quoted && word.Text == "--" {

@@ -34,7 +34,7 @@ func (classifierHelpSession) Load(_ context.Context, prefix []string) commandgra
 			"-C":         {Value: commandgrammar.RequiredValue, AllowSeparate: true, AllowAttached: true},
 		},
 		SubcommandState:     commandgrammar.SubcommandsListed,
-		Subcommands:         map[string]struct{}{"status": {}, "commit": {}, "attach": {}, "test": {}, "help": {}},
+		Subcommands:         map[string]struct{}{"status": {}, "commit": {}, "attach": {}, "test": {}, "help": {}, "run": {}},
 		UnprobedSubcommands: map[string]struct{}{"help": {}},
 		Complete:            true,
 		SubcommandsComplete: true,
@@ -82,6 +82,11 @@ func (classifierHelpSession) Load(_ context.Context, prefix []string) commandgra
 		node = attach
 	case "test":
 		node = goTest
+	case "run":
+		node, err = commandgrammar.ParseHelp([]byte("Usage: fixturevcs run [OPTIONS] TARGET [COMMAND] [ARG...]\n\nOptions:\n  --network network  Connect to a network\n  --rm               Remove after exit\n"), true)
+		if err != nil {
+			return commandgrammar.HelpResult{Status: commandgrammar.HelpUnparseable}
+		}
 	default:
 		return commandgrammar.HelpResult{Status: commandgrammar.HelpUnavailable}
 	}
@@ -205,6 +210,28 @@ func TestCommandGrammarExcludesKnownOptionValuesFromEnglishTail(t *testing.T) {
 		result := classifierWithFixtureGrammar().Classify(Input{Raw: raw, FirstTokenKind: shell.TokenCommand})
 		if result.Outcome != Literal || result.CommandGrammar == nil || hasEvidence(result, "natural_language_tail") {
 			t.Fatalf("Classify(%q) = %+v", raw, result)
+		}
+	}
+}
+
+func TestForwardedCommandClassificationAcrossShells(t *testing.T) {
+	t.Parallel()
+	for _, shellID := range []string{"zsh", "bash"} {
+		for _, test := range []struct {
+			input string
+			want  Classification
+		}{
+			{"fixturevcs run --rm --network host node curl --silent --max-time 8 http://127.0.0.1:3000/api/v1/version", Literal},
+			{"fixturevcs run --network host --typo node curl --silent", Ambiguous},
+			{"fixturevcs run --network", Ambiguous},
+			{"fixturevcs run node is failing please authenticate", Ambiguous},
+		} {
+			t.Run(shellID+"/"+test.input, func(t *testing.T) {
+				result := classifierWithFixtureGrammar().Classify(Input{Raw: test.input, Shell: shellID, FirstTokenKind: shell.TokenCommand})
+				if result.Outcome != test.want || result.CommandGrammar == nil {
+					t.Fatalf("classification=%+v, want %s", result, test.want)
+				}
+			})
 		}
 	}
 }
